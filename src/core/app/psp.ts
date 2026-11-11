@@ -358,29 +358,31 @@ export class PSP {
                 await this.transHist.add(itm.IdOwner, { id: histId, ...curr });
                 curr.revisao++;
 
+                const valorSolicitado = itm.data.valor;
                 itm.data.valor = {
                     original: itm.data.valor?.original || curr.valor.original,
                     modalidadeAlteracao: itm.data.valor?.modalidadeAlteracao || curr.valor.modalidadeAlteracao
                 };
 
                 if (tipoCob === TipoCob.vencimento && itm.data.valor) {
-                    const valor = itm.data.valor as CobVValor;
+                    const valor = (valorSolicitado || {}) as CobVValor;
                     const currV = curr.valor as CobVValor;
                     itm.data.valor = {
                         ...itm.data.valor,
                         desconto: {
-                            data: valor.desconto?.data || currV.desconto.data,
-                            modalidade: valor.desconto?.modalidade || currV.desconto.modalidade,
-                            valorPerc: valor.desconto?.valorPerc || currV.desconto.valorPerc
+                            data: valor.desconto?.data || currV.desconto?.data,
+                            modalidade: valor.desconto?.modalidade || currV.desconto?.modalidade,
+                            valorPerc: valor.desconto?.valorPerc || currV.desconto?.valorPerc
                         },
                         juros: {
-                            modalidade: valor.juros?.modalidade || currV.juros.modalidade,
-                            valorPerc: valor.juros?.valorPerc || currV.juros.valorPerc
+                            modalidade: valor.juros?.modalidade || currV.juros?.modalidade,
+                            valorPerc: valor.juros?.valorPerc || currV.juros?.valorPerc
                         },
                         multa: {
-                            modalidade: valor.multa?.modalidade || currV.multa.modalidade,
-                            valorPerc: valor.multa?.valorPerc || currV.multa.valorPerc
-                        }
+                            modalidade: valor.multa?.modalidade || currV.multa?.modalidade,
+                            valorPerc: valor.multa?.valorPerc || currV.multa?.valorPerc
+                        },
+                        abatimento: valor.abatimento || currV.abatimento
                     }
                 }
 
