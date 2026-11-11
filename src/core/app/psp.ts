@@ -8,7 +8,7 @@ import { CobGetResponse, CobPatchRequest, CobPutRequest, CobPutResponse, CobGetF
 import { LocGetResponse, LocGetFilter, LocID, LocPutRequest, LocPutResponse } from "./models/loc";
 import { CobVGetFilter, CobVGetResponse, CobVPatchRequest, CobVPatchResponse, CobVPutRequest, CobVPutResponse, CobVValor } from "./models/cobv";
 import { CobRGetFilter, CobRGetResponse, CobRPatchRequest, CobRPatchResponse, CobRPutRequest, CobRPutResponse, StatusCobR, StatusTentativaCobR } from "./models/cobr";
-import { PoliticaRetentativa, RecPostRequest, RecRequest } from "./models/rec";
+import { PoliticaRetentativa, RecGetFilter, RecPatchRequest, RecPostRequest, RecRequest, StatusRec } from "./models/rec";
 import { owners } from '../../data/db.json'
 
 @Injectable()
@@ -488,15 +488,66 @@ export class PSP {
     }
 
     async addRec(mdl: RecRequest<RecPostRequest>) {
+        const own = this._owner(mdl.IdOwner);
+        const criacao = (new Date()).toJSON();
+        const retentativa = mdl.data.politicaRetentativa === PoliticaRetentativa.NaoPermite ? 'N' : 'R';
+        const idRec = `R${retentativa}${own.ISPB}${criacao.replace(/\D/g, '').substring(0, 8)}${this._randomAlnum(11)}`;
 
-        const own =  owners.find( f=> f.id === mdl.IdOwner )   
+        await this.rec.add(mdl.IdOwner, {
+            ...mdl.data,
+            idRec,
+            status: StatusRec.Criada,
+            atualizacao: [{ status: StatusRec.Criada, data: criacao }]
+        });
+        return await this.readRec({ IdOwner: mdl.IdOwner, idRec });
+    }
 
-        if(!own){
-            throw new Error( MESSAGES.Errors.defaults.NOT_FOUNT('OWNER') );
+    async readRec({ IdOwner, idRec }: { IdOwner: string, idRec: string }) {
+        return await this.rec.read(IdOwner, { idRec });
+    }
+
+    async listRec(filter: RecGetFilter & { IdOwner: string }) {
+        const doc = filter.cpf || filter.cnpj;
+        const recs = (await this.rec.list(filter.IdOwner)).filter(f =>
+            this._inPeriod(f.atualizacao[0].data, filter)
+            && (!filter.status || f.status === filter.status)
+            && (!doc || f.vinculo?.devedor?.cpf === doc || f.vinculo?.devedor?.cnpj === doc)
+        );
+
+        return this._listResult(filter, 'recs', recs, { cpf: filter.cpf, cnpj: filter.cnpj, status: filter.status });
+    }
+
+    async editRec(mdl: RecRequest<RecPatchRequest> & { idRec: string }) {
+        const curr = await this.readRec(mdl);
+        if (!curr) {
+            return undefined;
+        }
+        if (![StatusRec.Criada, StatusRec.Aprovada].includes(curr.status)) {
+            throw new BadRequestException({ status: `A recorrência no status ${curr.status} não pode ser alterada.` });
         }
 
-        const itm = { ...mdl.data, idRec: `R${mdl.data.politicaRetentativa === PoliticaRetentativa.NaoPermite ? 'N' : 'R'}${ own.ISPB }${ new Date().toJSON().replace(/\D/g,'').substring(0,8) } `    }
-        return await this.rec.add(mdl.IdOwner, itm);
+        const { status, vinculo, calendario } = mdl.data;
+        await this.rec.patch(mdl.IdOwner, { idRec: mdl.idRec }, {
+            ...(status ? { status, atualizacao: [...curr.atualizacao, { status, data: (new Date()).toJSON() }] } : {}),
+            ...(vinculo?.devedor?.nome ? { vinculo: { ...curr.vinculo, devedor: { ...curr.vinculo.devedor, nome: vinculo.devedor.nome } } } : {}),
+            ...(calendario?.dataInicial ? { calendario: { ...curr.calendario, dataInicial: calendario.dataInicial } } : {})
+        });
+        return await this.readRec(mdl);
+    }
+
+    async readRecAtivacao(key: { IdOwner: string, idRec: string }) {
+        const curr = await this.readRec(key);
+        if (!curr) {
+            return undefined;
+        }
+        return {
+            idRec: curr.idRec,
+            status: curr.status,
+            ativacao: {
+                tipoJornada: curr.ativacao?.dadosJornada?.txid ? 'JORNADA_3' : 'AGUARDANDO_DEFINICAO',
+                dadosJornada: curr.ativacao?.dadosJornada
+            }
+        };
     }
 }
 

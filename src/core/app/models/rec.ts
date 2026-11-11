@@ -1,5 +1,6 @@
-import { IsDateString, IsDefined, IsEnum, IsNotEmpty, IsNotEmptyObject, IsNumberString, MaxLength, ValidateNested } from "class-validator"
-import { Pessoa, PixID } from "../models"
+import { IsDateString, IsDefined, IsEnum, IsIn, IsNotEmpty, IsNotEmptyObject, IsNumberString, MaxLength, ValidateNested } from "class-validator"
+import { ListFilter, Pessoa, PixID } from "../models"
+import { IsCNPJValid, IsCPFValid } from "../../../validators/custom-validators"
 import { Type } from "class-transformer"
 import { MinStringNumber, NotPast } from "../../../validators/custom-validators"
 
@@ -98,4 +99,51 @@ export class RecPostRequest {
 export class RecRequest<T> {
     IdOwner: string
     data: T
+}
+
+export enum StatusRec {
+    Criada = "CRIADA",
+    Aprovada = "APROVADA",
+    Rejeitada = "REJEITADA",
+    Expirada = "EXPIRADA",
+    Cancelada = "CANCELADA"
+}
+
+export class DevedorRecPatch {
+    @IsNotEmpty({ message: 'O campo $$ não respeita o schema.' })
+    @MaxLength(140, { message: 'O campo $$ não respeita o schema.' })
+    nome: string
+}
+
+export class VinculoRecPatch {
+    @ValidateNested()
+    @Type(() => DevedorRecPatch)
+    devedor?: DevedorRecPatch
+}
+
+export class CalendarioRecPatch {
+    @IsDateString({}, { message: 'O campo $$ não respeita o schema.' })
+    @NotPast({ message: 'O campo $$ é anterior à data de criação da cobrança.' })
+    dataInicial?: string
+}
+
+export class RecPatchRequest {
+    @IsIn([StatusRec.Cancelada], { message: 'O campo $$ não respeita o schema.' })
+    status?: StatusRec.Cancelada
+
+    @ValidateNested()
+    @Type(() => VinculoRecPatch)
+    vinculo?: VinculoRecPatch
+
+    @ValidateNested()
+    @Type(() => CalendarioRecPatch)
+    calendario?: CalendarioRecPatch
+}
+
+export class RecGetFilter extends ListFilter {
+    @IsCPFValid({ message: 'O campo $$ não respeita o schema.' })
+    cpf?: string
+    @IsCNPJValid({ message: 'O campo $$ não respeita o schema.' })
+    cnpj?: string
+    status?: StatusRec
 }
