@@ -9,6 +9,7 @@ import { LocGetResponse, LocGetFilter, LocID, LocPutRequest, LocPutResponse } fr
 import { CobVGetFilter, CobVGetResponse, CobVPatchRequest, CobVPatchResponse, CobVPutRequest, CobVPutResponse, CobVValor } from "./models/cobv";
 import { CobRGetFilter, CobRGetResponse, CobRPatchRequest, CobRPatchResponse, CobRPutRequest, CobRPutResponse, StatusCobR, StatusTentativaCobR } from "./models/cobr";
 import { PoliticaRetentativa, RecGetFilter, RecPatchRequest, RecPostRequest, RecRequest, StatusRec } from "./models/rec";
+import { WebhookGetFilter, WebhookGetResponse, WebhookPutRequest } from "./models/webhook";
 import { owners } from '../../data/db.json'
 
 @Injectable()
@@ -21,6 +22,7 @@ export class PSP {
     private correntistas: MemoryDB;
     private loccob: MemoryDB;
     private rec: MemoryDB;
+    private webhook: MemoryDB;
 
     constructor() {
 
@@ -34,6 +36,7 @@ export class PSP {
         this.loccob = MemoryDB.get("LOC_COB");
 
         this.rec = MemoryDB.get("REC");
+        this.webhook = MemoryDB.get("WEBHOOK");
 
     }
 
@@ -548,6 +551,31 @@ export class PSP {
                 dadosJornada: curr.ativacao?.dadosJornada
             }
         };
+    }
+
+    async addWebhook({ IdOwner, chave, data }: { IdOwner: string, chave: string, data: WebhookPutRequest }): Promise<WebhookGetResponse> {
+        if (!(await this.correntistas.read("DEV", { chave }))) {
+            throw new BadRequestException({ chave: 'O campo $$ não corresponde a uma chave do usuário recebedor.' });
+        }
+
+        const curr = await this.readWebhook({ IdOwner, chave });
+        if (curr) {
+            return await this.webhook.patch(IdOwner, { chave }, { webhookUrl: data.webhookUrl });
+        }
+        return await this.webhook.add(IdOwner, { webhookUrl: data.webhookUrl, chave, criacao: (new Date()).toJSON() });
+    }
+
+    async readWebhook({ IdOwner, chave }: { IdOwner: string, chave: string }): Promise<WebhookGetResponse> {
+        return await this.webhook.read(IdOwner, { chave });
+    }
+
+    async listWebhook(filter: WebhookGetFilter & { IdOwner: string }) {
+        const webhooks = (await this.webhook.list(filter.IdOwner)).filter(f => this._inPeriod(f.criacao, filter));
+        return this._listResult(filter, 'webhooks', webhooks);
+    }
+
+    async removeWebhook({ IdOwner, chave }: { IdOwner: string, chave: string }): Promise<boolean> {
+        return await this.webhook.remove(IdOwner, { chave });
     }
 }
 
