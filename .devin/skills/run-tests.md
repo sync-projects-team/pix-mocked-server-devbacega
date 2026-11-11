@@ -26,10 +26,10 @@ Antes de abrir/atualizar um PR, depois de qualquer mudança em `src/` ou `test/`
    npx jest test/cobv.e2e.test.ts --coverage=false  # um arquivo
    npx jest -t 'O campo cob.valor.original é zero.' # um caso pelo nome
    ```
-4. Critério de sucesso: `Test Suites: 15 passed` / `Tests: 260 passed` (referência atual; aumenta conforme novos testes) e exit code 0.
+4. Critério de sucesso: `Test Suites: 16 passed` / `Tests: 266 passed` (referência atual; aumenta conforme novos testes) e exit code 0.
 
 ## Armadilhas
-- `npm run test:e2e` não encontra arquivos (regex `.e2e-spec.ts$`); os e2e (`*.e2e.test.ts`) já rodam em `npm test`.
+- `npm run test:e2e` roda só as suítes `*.e2e.test.ts` (que também rodam em `npm test`).
 - Suítes `cob.controller`/`cobv.controller` levam ~45 s (delays intencionais em `PSP.addLoc` e `Auth.validate`). Não confunda com travamento.
 - `Duplicate Collection`: um arquivo de teste está chamando `MemoryDB.create` para a mesma coleção mais de uma vez.
 - Não rode `npm run lint` como parte da validação: ele aplica `--fix` em todo o repositório.

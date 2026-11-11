@@ -17,9 +17,9 @@ Novos testes devem seguir a mesma árvore espelhando `src/`.
 
 ## Regras obrigatórias
 
-1. **Crie as coleções do `MemoryDB` no `beforeAll`** do arquivo, pois `main.ts` não é executado nos testes:
+1. **Crie as coleções do `MemoryDB` no `beforeAll`** do arquivo, pois `main.ts` não é executado nos testes. Para replicar exatamente o servidor real, use `await setupDatabase()` e `app.useGlobalPipes(createValidationPipe())` de `src/bootstrap.ts` (ver `test/bootstrap.e2e.test.ts`). Setup manual equivalente:
    ```ts
-   const cst = MemoryDB.create('CORRENTISTAS', ['chave']);
+   const cst = MemoryDB.create('CORRENTISTAS', ['chave', 'cpfcnpj']);
    MemoryDB.create('COB', ['txid']);
    MemoryDB.create('COB_HIST', ['id']);
    MemoryDB.create('LOCATIONS', ['id', 'uuid']);
@@ -55,7 +55,7 @@ Novos testes devem seguir a mesma árvore espelhando `src/`.
 ## Execução
 
 ```bash
-npm test                                   # suíte completa (~50 s, 260 testes)
+npm test                                   # suíte completa (~50 s, 266 testes)
 npx jest test/rec.e2e.test.ts --coverage=false
 npx jest -t 'Sem cabeçalho'
 ```

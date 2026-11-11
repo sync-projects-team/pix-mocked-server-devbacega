@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Header, Headers, Param, Patch, Post, Put, Query, Req, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, Headers, Param, Patch, Post, Put, Query, Req, UseInterceptors } from '@nestjs/common';
 import { PSP } from '../core/app/psp';
 import { HttpInterceptor } from '../http.interceptor';
 import { CobRGetFilter, CobRPatchRequest, CobRPutRequest } from '../core/app/models/cobr';
@@ -53,7 +53,7 @@ export class CobRController {
     return this.pspService.editCob(itm);
   }
 
-  @Get(":txid")
+  @Delete(":txid")
   remove(@Param("txid") txid, @Headers() headers) {
     const IdOwner = headers["IdOwner"];
     return this.pspService.removeCob({ IdOwner, txid });
