@@ -21,6 +21,7 @@ describe('AuthController', () => {
         it('111-aaa', () => expect(ctrl.validate({ grant_type: 'client_credentials', client_id: '111', client_secret: 'aaa' })).rejects.toThrow());
         it('123-abc', () => expect(ctrl.validate({ grant_type: 'client_credentials', client_id: '123', client_secret: 'abc' })).resolves.not.toThrow());
         it('456-def', () => expect(ctrl.validate({ grant_type: 'client_credentials', client_id: '456', client_secret: 'def' })).resolves.not.toThrow());
+        it('retorna access_token (OAuth2) e accesstoken (legado)', () => expect(ctrl.validate({ grant_type: 'client_credentials', client_id: '123', client_secret: 'abc' })).resolves.toMatchObject({ access_token: '123-abc', accesstoken: '123-abc', expires_in: 300 }));
     })
 
 })

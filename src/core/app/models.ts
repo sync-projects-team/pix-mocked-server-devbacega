@@ -195,6 +195,12 @@ export class WebHookResponse extends Chave {
     criacao: string
 }
 
+export class ListFilter {
+    inicio?: string
+    fim?: string
+    paginacao?: { paginaAtual?: number | string, itensPorPagina?: number | string }
+}
+
 export interface IPaginator {
     parametros: {
         inicio: string,

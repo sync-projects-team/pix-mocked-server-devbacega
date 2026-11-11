@@ -1,14 +1,16 @@
-import { Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { MemoryDB } from "../../libs/fakedb";
-import { PixID, PixKey, PixRequest, TipoCob, Situacao, ModalidadeAlteracao, IPaginator, Expiracao } from "./models";
-import { getMD5Hash } from "../../libs/utils";
+import { PixID, PixKey, PixRequest, TipoCob, Situacao, ModalidadeAlteracao, IPaginator, Expiracao, ListFilter } from "./models";
+import { getMD5Hash, parseBoolean } from "../../libs/utils";
 import { randomUUID } from "crypto";
 import { MESSAGES } from "../../libs/messages";
 import { CobGetResponse, CobPatchRequest, CobPutRequest, CobPutResponse, CobGetFilter, CobPatchResponse } from "./models/cob";
 import { LocGetResponse, LocGetFilter, LocID, LocPutRequest, LocPutResponse } from "./models/loc";
 import { CobVGetFilter, CobVGetResponse, CobVPatchRequest, CobVPatchResponse, CobVPutRequest, CobVPutResponse, CobVValor } from "./models/cobv";
-import { CobRPutRequest, CobRPutResponse } from "./models/cobr";
-import { PoliticaRetentativa, RecPostRequest, RecRequest } from "./models/rec";
+import { CobRGetFilter, CobRGetResponse, CobRPatchRequest, CobRPatchResponse, CobRPutRequest, CobRPutResponse, StatusCobR, StatusTentativaCobR } from "./models/cobr";
+import { PoliticaRetentativa, RecGetFilter, RecPatchRequest, RecPostRequest, RecRequest, StatusRec } from "./models/rec";
+import { PixGetFilter, PixGetResponse } from "./models/pix";
+import { WebhookGetFilter, WebhookGetResponse, WebhookPutRequest } from "./models/webhook";
 import { owners } from '../../data/db.json'
 
 @Injectable()
@@ -16,12 +18,13 @@ export class PSP {
 
     private cob: MemoryDB;
     private cobR: MemoryDB;
-    private cobV: MemoryDB;
     private transHist: MemoryDB;
     private locations: MemoryDB;
     private correntistas: MemoryDB;
     private loccob: MemoryDB;
     private rec: MemoryDB;
+    private webhook: MemoryDB;
+    private pix: MemoryDB;
 
     constructor() {
 
@@ -29,14 +32,53 @@ export class PSP {
         this.transHist = MemoryDB.get("COB_HIST");
 
         this.cobR = MemoryDB.get("COBR");
-        this.cobV = MemoryDB.get("COBV");
 
         this.locations = MemoryDB.get("LOCATIONS");
         this.correntistas = MemoryDB.get("CORRENTISTAS");
         this.loccob = MemoryDB.get("LOC_COB");
 
         this.rec = MemoryDB.get("REC");
+        this.webhook = MemoryDB.get("WEBHOOK");
+        this.pix = MemoryDB.get("PIX");
 
+    }
+
+    private _owner(IdOwner: string) {
+        const own = owners.find(f => f.id === IdOwner);
+        if (!own) {
+            throw new Error(MESSAGES.Errors.defaults.NOT_FOUNT('OWNER'));
+        }
+        return own;
+    }
+
+    private _randomAlnum(size: number): string {
+        return randomUUID().replace(/\-/g, '').substring(0, size);
+    }
+
+    private _inPeriod(date: string, filter: ListFilter): boolean {
+        const d = new Date(date);
+        return (!filter.inicio || d >= new Date(filter.inicio)) && (!filter.fim || d <= new Date(filter.fim));
+    }
+
+    private _listResult<T>(filter: ListFilter, key: string, items: T[], parametros: object = {}) {
+        const paginaAtual = Number(filter.paginacao?.paginaAtual ?? filter['paginacao.paginaAtual'] ?? 0) || 0;
+        const itensPorPagina = Number(filter.paginacao?.itensPorPagina ?? filter['paginacao.itensPorPagina'] ?? 100) || 100;
+        const ini = paginaAtual * itensPorPagina;
+
+        return {
+            parametros: {
+                inicio: filter.inicio,
+                fim: filter.fim,
+                ...parametros,
+                paginacao: {
+                    paginaAtual,
+                    itensPorPagina,
+                    quantidadeDePaginas: Math.ceil(items.length / itensPorPagina),
+                    quantidadeTotalDeItens: items.length
+                }
+            },
+            [key]: items.slice(ini, ini + itensPorPagina)
+        };
     }
 
     private async joinLocCob(IdOwner: string, txid: string, id: number, tipoCob: TipoCob) {
@@ -98,9 +140,90 @@ export class PSP {
     }
 
     async addCobR(itm: PixRequest<CobRPutRequest>): Promise<CobRPutResponse> {
+        const rec = await this.rec.read(itm.IdOwner, { idRec: itm.data.idRec });
+        if (!rec) {
+            throw new BadRequestException({ idRec: 'O campo $$ não corresponde a uma recorrência existente.' });
+        }
+        if (await this.cobR.read(itm.IdOwner, { txid: itm.txid })) {
+            throw new BadRequestException({ txid: 'O campo $$ já está em uso.' });
+        }
 
+        const criacao = (new Date()).toJSON();
+        await this.cobR.add(itm.IdOwner, {
+            ...itm.data,
+            txid: itm.txid,
+            ajusteDiaUtil: itm.data.ajusteDiaUtil ?? true,
+            calendario: { ...itm.data.calendario, criacao },
+            status: StatusCobR.Criada,
+            politicaRetentativa: rec.politicaRetentativa,
+            atualizacao: [{ status: StatusCobR.Criada, data: criacao }],
+            tentativas: []
+        });
 
-        return null;
+        return await this.readCobR({ IdOwner: itm.IdOwner, txid: itm.txid });
+    }
+
+    async readCobR(key: PixKey): Promise<CobRGetResponse> {
+        return await this.cobR.read(key.IdOwner, { txid: key.txid });
+    }
+
+    async listCobR(filter: CobRGetFilter & { IdOwner: string }) {
+        const recs = await this.rec.list(filter.IdOwner);
+        const doc = filter.cpf || filter.cnpj;
+
+        const cobsr = (await this.cobR.list(filter.IdOwner)).filter((f: CobRGetResponse) => {
+            const devedor = recs.find(r => r.idRec === f.idRec)?.vinculo?.devedor;
+            return this._inPeriod(f.calendario.criacao, filter)
+                && (!filter.idRec || f.idRec === filter.idRec)
+                && (!filter.status || f.status === filter.status)
+                && (!doc || devedor?.cpf === doc || devedor?.cnpj === doc);
+        });
+
+        return this._listResult(filter, 'cobsr', cobsr, { idRec: filter.idRec, cpf: filter.cpf, cnpj: filter.cnpj, status: filter.status });
+    }
+
+    async editCobR(itm: PixRequest<CobRPatchRequest>): Promise<CobRPatchResponse> {
+        const curr = await this.readCobR(itm);
+        if (!curr) {
+            return undefined;
+        }
+        if (itm.data.status) {
+            if (![StatusCobR.Criada, StatusCobR.Ativa].includes(curr.status)) {
+                throw new BadRequestException({ status: `A cobrança no status ${curr.status} não pode ser alterada.` });
+            }
+            await this.cobR.patch(itm.IdOwner, { txid: itm.txid }, {
+                status: itm.data.status,
+                atualizacao: [...curr.atualizacao, { status: itm.data.status, data: (new Date()).toJSON() }]
+            });
+        }
+        return await this.readCobR(itm);
+    }
+
+    async retentativaCobR(key: PixKey & { data: string }): Promise<CobRGetResponse> {
+        const curr = await this.readCobR(key);
+        if (!curr) {
+            throw new NotFoundException();
+        }
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(key.data) || isNaN(Date.parse(key.data))) {
+            throw new BadRequestException({ data: 'O campo $$ não respeita o schema.' });
+        }
+        if (curr.politicaRetentativa !== PoliticaRetentativa.Permite) {
+            throw new BadRequestException({ politicaRetentativa: 'A recorrência não permite retentativas.' });
+        }
+        if (curr.tentativas.filter(f => f.tipo === 'NTAG').length >= 3) {
+            throw new BadRequestException({ tentativas: 'O limite de 3 retentativas foi atingido.' });
+        }
+
+        const agora = (new Date()).toJSON();
+        await this.cobR.patch(key.IdOwner, { txid: key.txid }, {
+            tentativas: [...curr.tentativas, {
+                dataLiquidacao: key.data,
+                tipo: 'NTAG',
+                status: StatusTentativaCobR.Solicitada,
+                atualizacao: [{ status: StatusTentativaCobR.Solicitada, data: agora }]
+            }]
+        });
+        return await this.readCobR(key);
     }
 
     async addCobV(itm: PixRequest<CobVPutRequest>): Promise<CobVPutResponse> {
@@ -235,33 +358,39 @@ export class PSP {
                 await this.transHist.add(itm.IdOwner, { id: histId, ...curr });
                 curr.revisao++;
 
+                const valorSolicitado = itm.data.valor;
                 itm.data.valor = {
                     original: itm.data.valor?.original || curr.valor.original,
                     modalidadeAlteracao: itm.data.valor?.modalidadeAlteracao || curr.valor.modalidadeAlteracao
                 };
 
                 if (tipoCob === TipoCob.vencimento && itm.data.valor) {
-                    const valor = itm.data.valor as CobVValor;
+                    const valor = (valorSolicitado || {}) as CobVValor;
                     const currV = curr.valor as CobVValor;
                     itm.data.valor = {
                         ...itm.data.valor,
                         desconto: {
-                            data: valor.desconto?.data || currV.desconto.data,
-                            modalidade: valor.desconto?.modalidade || currV.desconto.modalidade,
-                            valorPerc: valor.desconto?.valorPerc || currV.desconto.valorPerc
+                            data: valor.desconto?.data || currV.desconto?.data,
+                            modalidade: valor.desconto?.modalidade || currV.desconto?.modalidade,
+                            valorPerc: valor.desconto?.valorPerc || currV.desconto?.valorPerc
                         },
                         juros: {
-                            modalidade: valor.juros?.modalidade || currV.juros.modalidade,
-                            valorPerc: valor.juros?.valorPerc || currV.juros.valorPerc
+                            modalidade: valor.juros?.modalidade || currV.juros?.modalidade,
+                            valorPerc: valor.juros?.valorPerc || currV.juros?.valorPerc
                         },
                         multa: {
-                            modalidade: valor.multa?.modalidade || currV.multa.modalidade,
-                            valorPerc: valor.multa?.valorPerc || currV.multa.valorPerc
-                        }
+                            modalidade: valor.multa?.modalidade || currV.multa?.modalidade,
+                            valorPerc: valor.multa?.valorPerc || currV.multa?.valorPerc
+                        },
+                        abatimento: valor.abatimento || currV.abatimento
                     }
                 }
 
                 await this.cob.update(itm.IdOwner, { txid: itm.txid }, { ...curr, ...itm.data });
+
+                if ((itm.data.status as string) === Situacao.Concluida) {
+                    await this._addPix(itm.IdOwner, { ...curr, ...itm.data } as CobGetResponse);
+                }
             }
             else {
                 await this.cob.patch(itm.IdOwner, { txid: itm.txid }, { loc: curr.loc });
@@ -371,15 +500,136 @@ export class PSP {
     }
 
     async addRec(mdl: RecRequest<RecPostRequest>) {
+        const own = this._owner(mdl.IdOwner);
+        const criacao = (new Date()).toJSON();
+        const retentativa = mdl.data.politicaRetentativa === PoliticaRetentativa.NaoPermite ? 'N' : 'R';
+        const idRec = `R${retentativa}${own.ISPB}${criacao.replace(/\D/g, '').substring(0, 8)}${this._randomAlnum(11)}`;
 
-        const own =  owners.find( f=> f.id === mdl.IdOwner )   
+        await this.rec.add(mdl.IdOwner, {
+            ...mdl.data,
+            idRec,
+            status: StatusRec.Criada,
+            atualizacao: [{ status: StatusRec.Criada, data: criacao }]
+        });
+        return await this.readRec({ IdOwner: mdl.IdOwner, idRec });
+    }
 
-        if(!own){
-            throw new Error( MESSAGES.Errors.defaults.NOT_FOUNT('OWNER') );
+    async readRec({ IdOwner, idRec }: { IdOwner: string, idRec: string }) {
+        return await this.rec.read(IdOwner, { idRec });
+    }
+
+    async listRec(filter: RecGetFilter & { IdOwner: string }) {
+        const doc = filter.cpf || filter.cnpj;
+        const recs = (await this.rec.list(filter.IdOwner)).filter(f =>
+            this._inPeriod(f.atualizacao[0].data, filter)
+            && (!filter.status || f.status === filter.status)
+            && (!doc || f.vinculo?.devedor?.cpf === doc || f.vinculo?.devedor?.cnpj === doc)
+        );
+
+        return this._listResult(filter, 'recs', recs, { cpf: filter.cpf, cnpj: filter.cnpj, status: filter.status });
+    }
+
+    async editRec(mdl: RecRequest<RecPatchRequest> & { idRec: string }) {
+        const curr = await this.readRec(mdl);
+        if (!curr) {
+            return undefined;
+        }
+        if (![StatusRec.Criada, StatusRec.Aprovada].includes(curr.status)) {
+            throw new BadRequestException({ status: `A recorrência no status ${curr.status} não pode ser alterada.` });
         }
 
-        const itm = { ...mdl.data, idRec: `R${mdl.data.politicaRetentativa === PoliticaRetentativa.NaoPermite ? 'N' : 'R'}${ own.ISPB }${ new Date().toJSON().replace(/\D/g,'').substring(0,8) } `    }
-        return await this.rec.add(mdl.IdOwner, itm);
+        const { status, vinculo, calendario } = mdl.data;
+        await this.rec.patch(mdl.IdOwner, { idRec: mdl.idRec }, {
+            ...(status ? { status, atualizacao: [...curr.atualizacao, { status, data: (new Date()).toJSON() }] } : {}),
+            ...(vinculo?.devedor?.nome ? { vinculo: { ...curr.vinculo, devedor: { ...curr.vinculo.devedor, nome: vinculo.devedor.nome } } } : {}),
+            ...(calendario?.dataInicial ? { calendario: { ...curr.calendario, dataInicial: calendario.dataInicial } } : {})
+        });
+        return await this.readRec(mdl);
+    }
+
+    async readRecAtivacao(key: { IdOwner: string, idRec: string }) {
+        const curr = await this.readRec(key);
+        if (!curr) {
+            return undefined;
+        }
+        return {
+            idRec: curr.idRec,
+            status: curr.status,
+            ativacao: {
+                tipoJornada: curr.ativacao?.dadosJornada?.txid ? 'JORNADA_3' : 'AGUARDANDO_DEFINICAO',
+                dadosJornada: curr.ativacao?.dadosJornada
+            }
+        };
+    }
+
+    async addWebhook({ IdOwner, chave, data }: { IdOwner: string, chave: string, data: WebhookPutRequest }): Promise<WebhookGetResponse> {
+        if (!(await this.correntistas.read("DEV", { chave }))) {
+            throw new BadRequestException({ chave: 'O campo $$ não corresponde a uma chave do usuário recebedor.' });
+        }
+
+        const curr = await this.readWebhook({ IdOwner, chave });
+        if (curr) {
+            return await this.webhook.patch(IdOwner, { chave }, { webhookUrl: data.webhookUrl });
+        }
+        return await this.webhook.add(IdOwner, { webhookUrl: data.webhookUrl, chave, criacao: (new Date()).toJSON() });
+    }
+
+    async readWebhook({ IdOwner, chave }: { IdOwner: string, chave: string }): Promise<WebhookGetResponse> {
+        return await this.webhook.read(IdOwner, { chave });
+    }
+
+    async listWebhook(filter: WebhookGetFilter & { IdOwner: string }) {
+        const webhooks = (await this.webhook.list(filter.IdOwner)).filter(f => this._inPeriod(f.criacao, filter));
+        return this._listResult(filter, 'webhooks', webhooks);
+    }
+
+    async removeWebhook({ IdOwner, chave }: { IdOwner: string, chave: string }): Promise<boolean> {
+        return await this.webhook.remove(IdOwner, { chave });
+    }
+
+    private async _addPix(IdOwner: string, cob: CobGetResponse): Promise<PixGetResponse> {
+        const horario = (new Date()).toJSON();
+        const e2eid = `E${this._owner(IdOwner).ISPB}${horario.replace(/\D/g, '').substring(0, 12)}${this._randomAlnum(11)}`;
+        const { nome, cpf, cnpj } = cob.devedor || ({} as CobGetResponse['devedor']);
+
+        await this.pix.add(IdOwner, {
+            e2eid,
+            endToEndId: e2eid,
+            txid: cob.txid,
+            valor: cob.valor.original,
+            chave: cob.chave,
+            horario,
+            ...(cob.solicitacaoPagador ? { infoPagador: cob.solicitacaoPagador } : {}),
+            ...(nome ? { pagador: { nome, ...(cpf ? { cpf } : { cnpj }) } } : {}),
+            devolucoes: []
+        });
+        return await this.readPix({ IdOwner, e2eid });
+    }
+
+    async readPix({ IdOwner, e2eid }: { IdOwner: string, e2eid: string }): Promise<PixGetResponse> {
+        const itm = await this.pix.read(IdOwner, { e2eid });
+        if (itm) {
+            const { e2eid: _, ...pix } = itm;
+            return pix;
+        }
+    }
+
+    async listPix(filter: PixGetFilter & { IdOwner: string }) {
+        const doc = filter.cpf || filter.cnpj;
+        const txIdPresente = parseBoolean(filter.txIdPresente);
+        const devolucaoPresente = parseBoolean(filter.devolucaoPresente);
+
+        const pix = (await this.pix.list(filter.IdOwner))
+            .filter(f =>
+                this._inPeriod(f.horario, filter)
+                && (!filter.txid || f.txid === filter.txid)
+                && (txIdPresente === undefined || !!f.txid === txIdPresente)
+                && (devolucaoPresente === undefined || (f.devolucoes.length > 0) === devolucaoPresente)
+                && (!doc || f.pagador?.cpf === doc || f.pagador?.cnpj === doc)
+            )
+            .map(({ e2eid, ...p }) => p);
+
+        return this._listResult(filter, 'pix', pix, { txid: filter.txid, txIdPresente, devolucaoPresente, cpf: filter.cpf, cnpj: filter.cnpj });
     }
 }
 

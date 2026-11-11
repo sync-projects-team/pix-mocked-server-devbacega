@@ -30,9 +30,17 @@ describe('Bootstrap (configuração do main.ts)', () => {
   const newTxid = () => randomUUID().replace(/-/g, '');
 
   it('cria todas as coleções usadas pelo PSP', () => {
-    ['COB', 'COB_HIST', 'LOCATIONS', 'LOC_COB', 'REC', 'CORRENTISTAS'].forEach(
-      (name) => expect(MemoryDB.get(name)).toBeDefined(),
-    );
+    [
+      'COB',
+      'COB_HIST',
+      'LOCATIONS',
+      'LOC_COB',
+      'REC',
+      'COBR',
+      'WEBHOOK',
+      'PIX',
+      'CORRENTISTAS',
+    ].forEach((name) => expect(MemoryDB.get(name)).toBeDefined());
   });
 
   it('PUT /cob/:txid cria a cobrança', async () => {
@@ -116,6 +124,34 @@ describe('Bootstrap (configuração do main.ts)', () => {
       .expect((res) =>
         expect(JSON.parse(res.text)).toMatchObject({
           tipoCob: TipoCob.imediato,
+        }),
+      );
+  });
+  it('aceita Authorization: Bearer <token>', async () => {
+    await request(app.getHttpServer())
+      .get('/cob')
+      .query({ inicio: '2020-01-01T00:00:00Z', fim: '2999-01-01T00:00:00Z' })
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+  });
+
+  it('Bearer inválido retorna 401', async () => {
+    await request(app.getHttpServer())
+      .get('/cob')
+      .set('Authorization', 'Bearer xpto')
+      .expect(401);
+  });
+
+  it('400 em GET com querystring resolve o prefixo pelo path', async () => {
+    await request(app.getHttpServer())
+      .get('/cob')
+      .query({ cpf: '123' })
+      .set('mocked-token', token)
+      .expect(400)
+      .expect((res) =>
+        expect(JSON.parse(res.text)).toMatchObject({
+          type: 'https://pix.bcb.gov.br/api/v2/error/CobOperacaoInvalida',
+          violacoes: [{ propriedade: 'cob.cpf' }],
         }),
       );
   });

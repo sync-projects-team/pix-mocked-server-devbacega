@@ -6,7 +6,8 @@ import { MemoryDB } from "../src/libs/fakedb";
 import { errorFormatter, flatDate } from "../src/libs/utils";
 import { AtivacaoRecorrencia, PeriodicidadeRecorrencia, PoliticaRetentativa, RecPostRequest } from "../src/core/app/models/rec";
 import { gerarCPF } from "../src/libs/documentos";
-import { expectPost200, expectPost201, expectPost400, expectPost401 } from "./e2e";
+import { expectPost200, expectPost201, expectPost400, expectPost401, expectRequest } from "./e2e";
+import { buildRec } from "./fixtures";
 
 describe('REC', () => {
     let app: INestApplication;
@@ -122,5 +123,66 @@ describe('REC', () => {
             it('sucesso', async () => await expectPost201(app, `/rec`, itm, { valor: { valorRec: "1000.00" } }));
 
         })
+    })
+
+    describe('/GET {:idRec}', () => {
+        it('200 com idRec no formato BACEN', async () => {
+            const rec = await expectRequest(app, { method: 'post', endpoint: '/rec', status: 201, payload: buildRec(), expected: { status: 'CRIADA' } });
+            expect(rec.idRec).toMatch(/^RN[0-9a-f]{8}\d{8}[0-9a-f]{11}$/);
+            await expectRequest(app, { method: 'get', endpoint: `/rec/${rec.idRec}`, status: 200, expected: { idRec: rec.idRec, status: 'CRIADA', atualizacao: [{ status: 'CRIADA' }] } });
+        });
+        it('404', async () => expectRequest(app, { method: 'get', endpoint: '/rec/RN000000002020010100000000000', status: 404 }));
+        it('401', async () => expectRequest(app, { method: 'get', endpoint: '/rec/qualquer', status: 401, token: 'xpto' }));
+    })
+
+    describe('/GET {:idRec}/ativacao', () => {
+        it('200', async () => {
+            const payload = buildRec();
+            const { idRec } = await expectRequest(app, { method: 'post', endpoint: '/rec', status: 201, payload });
+            await expectRequest(app, { method: 'get', endpoint: `/rec/${idRec}/ativacao`, status: 200, expected: { idRec, status: 'CRIADA', ativacao: { tipoJornada: 'JORNADA_3', dadosJornada: payload.ativacao.dadosJornada } } });
+        });
+        it('404', async () => expectRequest(app, { method: 'get', endpoint: '/rec/inexistente/ativacao', status: 404 }));
+    })
+
+    describe('/GET', () => {
+        it('filtra por cpf do devedor e status', async () => {
+            const payload = buildRec();
+            const { idRec } = await expectRequest(app, { method: 'post', endpoint: '/rec', status: 201, payload });
+            await expectRequest(app, { method: 'post', endpoint: '/rec', status: 201, payload: buildRec() });
+
+            const { recs } = await expectRequest(app, { method: 'get', endpoint: '/rec', status: 200, query: { cpf: payload.vinculo.devedor.cpf, status: 'CRIADA' } });
+            expect(recs.map((r) => r.idRec)).toEqual([idRec]);
+            await expectRequest(app, { method: 'get', endpoint: '/rec', status: 200, query: { cpf: payload.vinculo.devedor.cpf, status: 'CANCELADA' }, expected: { recs: [] } });
+        });
+        it('filtra por período e pagina', async () => {
+            await expectRequest(app, { method: 'post', endpoint: '/rec', status: 201, payload: buildRec() });
+            await expectRequest(app, { method: 'get', endpoint: '/rec', status: 200, query: { inicio: '2000-01-01T00:00:00Z', fim: '2000-12-31T00:00:00Z' }, expected: { recs: [] } });
+            await expectRequest(app, { method: 'get', endpoint: '/rec', status: 200, query: { 'paginacao.itensPorPagina': 1 }, expected: { parametros: { paginacao: { itensPorPagina: 1 } }, recs: [{}] } });
+        });
+        it('400 cpf inválido', async () => expectRequest(app, { method: 'get', endpoint: '/rec', status: 400, query: { cpf: '123' }, expected: { detail: 'A recorrência não respeita o schema.', violacoes: [{ propriedade: 'rec.cpf' }] } }));
+    })
+
+    describe('/PATCH', () => {
+        const create = async () => (await expectRequest(app, { method: 'post', endpoint: '/rec', status: 201, payload: buildRec() })).idRec;
+
+        it('200 cancela', async () => {
+            const idRec = await create();
+            await expectRequest(app, { method: 'patch', endpoint: `/rec/${idRec}`, status: 200, payload: { status: 'CANCELADA' }, expected: { status: 'CANCELADA', atualizacao: [{ status: 'CRIADA' }, { status: 'CANCELADA' }] } });
+        });
+        it('200 altera nome do devedor e dataInicial', async () => {
+            const idRec = await create();
+            const dataInicial = '2999-01-01';
+            await expectRequest(app, { method: 'patch', endpoint: `/rec/${idRec}`, status: 200, payload: { vinculo: { devedor: { nome: 'Novo Nome' } }, calendario: { dataInicial } }, expected: { status: 'CRIADA', vinculo: { devedor: { nome: 'Novo Nome', cep: '26083190' } }, calendario: { dataInicial, periodicidade: 'MENSAL' } } });
+        });
+        it('400 status inválido', async () => {
+            const idRec = await create();
+            await expectRequest(app, { method: 'patch', endpoint: `/rec/${idRec}`, status: 400, payload: { status: 'APROVADA' }, expected: { detail: 'A recorrência não respeita o schema.', violacoes: [{ propriedade: 'rec.status', razao: 'O campo rec.status não respeita o schema.' }] } });
+        });
+        it('400 recorrência cancelada', async () => {
+            const idRec = await create();
+            await expectRequest(app, { method: 'patch', endpoint: `/rec/${idRec}`, status: 200, payload: { status: 'CANCELADA' } });
+            await expectRequest(app, { method: 'patch', endpoint: `/rec/${idRec}`, status: 400, payload: { status: 'CANCELADA' }, expected: { violacoes: [{ propriedade: 'rec.status' }] } });
+        });
+        it('404', async () => expectRequest(app, { method: 'patch', endpoint: '/rec/inexistente', status: 404, payload: { status: 'CANCELADA' } }));
     })
 })

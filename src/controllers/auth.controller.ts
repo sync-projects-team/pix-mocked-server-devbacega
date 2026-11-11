@@ -12,8 +12,10 @@ export class AuthController {
             throw new Error('Invalid grant_type');
         }
         else {
+            const token = await this.authService.validate(credentials.client_id, credentials.client_secret);
             return {
-                accesstoken: await this.authService.validate(credentials.client_id, credentials.client_secret),
+                access_token: token,
+                accesstoken: token,
                 expires_in: 300 //5 min
             }
         }

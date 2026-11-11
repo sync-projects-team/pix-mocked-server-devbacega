@@ -9,7 +9,7 @@ O projeto (`package.json` → `psp-api`) é um **mock da API Pix do Banco Centra
 Seu objetivo é permitir **desenvolvimento e testes locais de integrações Pix sem depender das sandboxes dos bancos/PSPs** (que costumam ser instáveis ou incompletas). Ele simula:
 
 - o fluxo de autenticação OAuth2 `client_credentials` de um PSP;
-- os recursos de cobrança (`cob`, `cobv`, `cobr`), locations (`loc`) e recorrências (`rec`);
+- os recursos de cobrança (`cob`, `cobv`, `cobr`), locations (`loc`), recorrências (`rec`), Pix recebidos (`pix`) e webhooks (`webhook`);
 - o formato de erro padronizado do BACEN (`https://pix.bcb.gov.br/api/v2/error/...`) com `violacoes`.
 
 Não há banco de dados nem integração externa: tudo vive em memória e é perdido ao reiniciar o processo.
@@ -45,8 +45,8 @@ flowchart LR
         end
 
         subgraph App[AppModule :3000]
-            Interceptor[HttpInterceptor<br/>valida header mocked-token<br/>formata erros BACEN]
-            Ctrls[CobController /cob<br/>CobVController /cobv<br/>LocationController /loc<br/>RecController /rec]
+            Interceptor[HttpInterceptor<br/>valida Authorization Bearer / mocked-token<br/>formata erros BACEN]
+            Ctrls[CobController /cob<br/>CobVController /cobv<br/>CobRController /cobr<br/>LocationController /loc<br/>RecController /rec<br/>PixController /pix<br/>WebhookController /webhook]
             PSP[PSP service<br/>regras de negócio]
             Interceptor --> Ctrls --> PSP
         end
@@ -55,8 +55,8 @@ flowchart LR
     end
 
     Client -- "1. POST /auth (client_id, client_secret)" --> AuthCtrl
-    AuthCtrl -- "accesstoken = client_id-client_secret" --> Client
-    Client -- "2. Header mocked-token: accesstoken" --> Interceptor
+    AuthCtrl -- "access_token = client_id-client_secret" --> Client
+    Client -- "2. Authorization: Bearer access_token (ou mocked-token)" --> Interceptor
 ```
 
 | Servidor | Porta | Módulo | Swagger | Config Swagger |
@@ -85,15 +85,16 @@ src/
 │   ├── auth.controller.ts / auth.models.ts
 │   ├── cob.controller.ts      # /cob
 │   ├── cobv.controller.ts     # /cobv
-│   ├── cobr.controller.ts     # /cobr  (NÃO registrado no AppModule)
+│   ├── cobr.controller.ts     # /cobr
 │   ├── location.controller.ts # /loc
 │   ├── rec.controller.ts      # /rec
-│   ├── webhook.controller.ts  # vazio (webhooks ainda não implementados)
+│   ├── pix.controller.ts      # /pix
+│   ├── webhook.controller.ts  # /webhook
 │   └── fakedb.ts              # cópia legada de libs/fakedb.ts (não usada pelos módulos)
 ├── core/
-│   ├── app/psp.ts             # serviço PSP: regras de cob/cobv/loc/rec
+│   ├── app/psp.ts             # serviço PSP: regras de cob/cobv/cobr/loc/rec/pix/webhook
 │   ├── app/models.ts          # tipos/enum compartilhados (PixID, PixKey, TipoCob, Situacao, Pessoa...)
-│   ├── app/models/{cob,cobv,cobr,loc,rec}.ts  # DTOs com decorators class-validator
+│   ├── app/models/{cob,cobv,cobr,loc,rec,pix,webhook}.ts  # DTOs com decorators class-validator
 │   └── auth/auth.ts           # serviço Auth (valida client_id/secret contra owners)
 ├── libs/
 │   ├── fakedb.ts              # MemoryDB
@@ -108,7 +109,7 @@ src/
 
 Fluxo de uma requisição na API principal:
 
-1. `HttpInterceptor` (aplicado via `@UseInterceptors` em cada controller) lê o header **`mocked-token`**, procura o owner em `db.json.owners` e injeta `headers['IdOwner'] = owner.id`. Sem token válido → `401 AcessoNegado`.
+1. `HttpInterceptor` (aplicado via `@UseInterceptors` em cada controller) lê o token de **`Authorization: Bearer <token>`** (ou, como fallback, do header **`mocked-token`**), procura o owner em `db.json.owners` e injeta `headers['IdOwner'] = owner.id`. Sem token válido → `401 AcessoNegado`.
 2. `ValidationPipe` valida o DTO (`CobPutRequest`, `LocPutRequest`, `RecPostRequest` ...). As mensagens usam o placeholder `$$`, que o interceptor substitui por `<recurso>.<campo>` (ex.: `cob.valor.original`).
 3. O controller monta um `PixRequest<T>` (`{ IdOwner, txid, data }`) e delega ao `PSP`.
 4. O `PSP` lê/grava no `MemoryDB`, usando **`IdOwner` como clusterKey** (isolamento multi-tenant).
@@ -119,11 +120,12 @@ Fluxo de uma requisição na API principal:
 | Recurso | Rota | Métodos expostos | Situação |
 | --- | --- | --- | --- |
 | Cobrança imediata (`cob`) | `/cob` | `PUT /cob/:txid`, `POST /cob` (txid gerado), `GET /cob/:txid[?revisao=n]`, `GET /cob` (filtro `inicio`, `fim`, `cpf`/`cnpj`, `locationPresente`, `paginacao`), `PATCH /cob/:txid`, `DELETE /cob/:txid` | Implementado. Cria location automaticamente, versiona revisões em `COB_HIST`, `calendario.expiracao` padrão 86400s. |
-| Cobrança com vencimento (`cobv`) | `/cobv` | `PUT /cobv/:txid`, `GET /cobv/:txid`, `GET /cobv`, `PATCH /cobv/:txid`, `DELETE /cobv/:txid` | Implementado (`valor.multa`, `valor.juros`, `valor.desconto`; abatimento ainda não). `calendario.dataDeVencimento` não pode ser passada (`@NotPast`). Persiste na mesma coleção `COB`. |
-| Cobrança recorrente (`cobr`) | `/cobr` | Controller existe (`PUT`, `POST`, `POST /:txid/retentativa/:data`, `GET`, `PATCH`) | **Parcial**: `PSP.addCobR` retorna `null` e `CobRController` não está em `AppModule` → rotas não expostas. |
+| Cobrança com vencimento (`cobv`) | `/cobv` | `PUT /cobv/:txid`, `GET /cobv/:txid`, `GET /cobv`, `PATCH /cobv/:txid`, `DELETE /cobv/:txid` | Implementado (`valor.multa`, `valor.juros`, `valor.desconto`, `valor.abatimento`). `calendario.dataDeVencimento` não pode ser passada (`@NotPast`). Persiste na mesma coleção `COB`. |
+| Cobrança recorrente (`cobr`) | `/cobr` | `PUT /cobr/:txid`, `POST /cobr`, `GET /cobr/:txid`, `GET /cobr` (filtro `inicio`, `fim`, `idRec`, `cpf`/`cnpj` do devedor da `rec`, `status`, `paginacao`), `PATCH /cobr/:txid` (só `status: CANCELADA`), `POST /cobr/:txid/retentativa/:data` (`YYYY-MM-DD`) | Implementado. Exige `idRec` existente; status inicial `CRIADA`; herda `politicaRetentativa` da `rec`; retentativa só com `PERMITE_3R_7D` (máx. 3). Não há `DELETE` (não existe na spec). |
 | Location (`loc`) | `/loc` | `PUT /loc` (body `{ tipoCob: "cob" \| "cobv" }`), `GET /loc/:id`, `GET /loc` (filtro `tipoCob`, `txIdPresente`), `DELETE /loc/:id/txid` (desvincula cobrança) | Implementado. `location` = `pix.example.com/qr/<uuid>`. |
-| Recorrência (`rec`) | `/rec` | `POST /rec` | Implementado (criação). `idRec` = `R` + (`N`\|`R` conforme `politicaRetentativa`) + `ISPB` do owner + `YYYYMMDD`. |
-| Webhooks | — | — | **Não implementado** (`webhook.controller.ts` vazio). |
+| Recorrência (`rec`) | `/rec` | `POST /rec`, `GET /rec/:idRec`, `GET /rec` (filtro `inicio`, `fim`, `cpf`/`cnpj` do devedor, `status`, `paginacao`), `PATCH /rec/:idRec` (`status: CANCELADA`, `vinculo.devedor.nome`, `calendario.dataInicial`), `GET /rec/:idRec/ativacao` (extensão do mock) | Implementado. `idRec` = `R` + (`N`\|`R` conforme `politicaRetentativa`) + `ISPB` do owner + `YYYYMMDD` + 11 alfanuméricos; status inicial `CRIADA`. |
+| Pix recebidos (`pix`) | `/pix` | `GET /pix/:e2eid`, `GET /pix` (filtro `inicio`, `fim`, `txid`, `txIdPresente`, `devolucaoPresente`, `cpf`/`cnpj` do pagador, `paginacao`) | Implementado. Um Pix é registrado quando uma `cob`/`cobv` recebe `PATCH { status: "CONCLUIDA" }` (simulação de pagamento); `endToEndId` = `E` + ISPB + `YYYYMMDDHHmm` + 11 alfanuméricos. |
+| Webhooks (`webhook`) | `/webhook` | `PUT /webhook/:chave` (body `{ webhookUrl }`), `GET /webhook/:chave`, `DELETE /webhook/:chave` (204), `GET /webhook` | Implementado. `chave` deve existir em `CORRENTISTAS`. Não há disparo real de notificações. |
 | Autenticação | `:3001/auth` | `POST /auth` | Implementado (ver seção 6). |
 
 > `DELETE /cob/:txid` e `DELETE /cobv/:txid` (métodos `remove`) são uma extensão do mock e **não existem na API oficial do BACEN**, onde a remoção é feita via `PATCH` com `status: REMOVIDA_PELO_USUARIO_RECEBEDOR`.
@@ -132,8 +134,8 @@ Fluxo de uma requisição na API principal:
 
 - Endpoint: `POST http://localhost:3001/auth` com body JSON `{ "grant_type": "client_credentials", "client_id": "...", "client_secret": "..." }` (`ValidateInput` em `src/controllers/auth.models.ts`).
 - `Auth.validate` (`src/core/auth/auth.ts`) espera **2 s** (simula latência) e monta o token como `` `${client_id}-${client_secret}` ``; se existir em `db.json.owners[].token` retorna, senão rejeita.
-- Resposta (HTTP 201): `{ "accesstoken": "123-abc", "expires_in": 300 }`. Não há expiração real.
-- Na API principal o token é enviado no header **`mocked-token`** (não em `Authorization: Bearer`, apesar do Swagger declarar `access-token` bearer).
+- Resposta (HTTP 201): `{ "access_token": "123-abc", "accesstoken": "123-abc", "expires_in": 300 }` (`accesstoken` mantido por compatibilidade). Não há expiração real.
+- Na API principal o token é enviado em **`Authorization: Bearer <token>`**; o header **`mocked-token`** continua aceito como fallback.
 
 Credenciais disponíveis (`src/data/db.json` → `owners`):
 
@@ -164,7 +166,9 @@ Coleções usadas pelo `PSP`:
 | `LOCATIONS` | `id`, `uuid` | locations; `id = Date.now()` (com delay de 100 ms para evitar colisão) | Sim |
 | `LOC_COB` | `id`, `txid` | vínculo location ↔ cobrança | Sim |
 | `COB_HIST` | `id` (`md5(txid, revisao)`) | histórico de revisões | Sim |
-| `COBV`, `COBR` | `txid` | reservadas (não usadas efetivamente) | **Não** |
+| `COBR` | `txid` | cobranças recorrentes | Sim |
+| `WEBHOOK` | `chave` | webhooks por chave Pix | Sim |
+| `PIX` | `e2eid` | Pix recebidos | Sim |
 | `REC` | `idRec` | recorrências | Sim |
 
 Seed (`src/data/db.json`): 5 `owners` (credenciais/tenants) e 3 `correntistas` (chaves aleatórias DICT com CPF/CNPJ, nome e cidade). As cobranças só aceitam `chave` presente em `CORRENTISTAS` (`@IsDICTExists`).
@@ -195,12 +199,13 @@ Testes (`jest.config.ts`, preset `ts-jest`, `collectCoverage: true`, saída em `
 - `test/*.e2e.test.ts` — sobem `AppModule` com `supertest` (cob, cobv, loc, rec). `test/bootstrap.e2e.test.ts` usa `setupDatabase()`/`createValidationPipe()` de `src/bootstrap.ts`, a mesma configuração do `main.ts`.
 - `test/controllers/*.test.ts` — instanciam controllers + `PSP` via `Test.createTestingModule`.
 - `test/core/**`, `test/libs/**`, `test/validators/**` — unitários de `MemoryDB`, `PSP`, utils, mensagens e validadores.
-- `test/e2e.ts` — helpers `expectPost200/201/400/401` (usam `mocked-token: 123-abc`).
+- `test/e2e.ts` — helpers `expectPost200/201/400/401` e o genérico `expectRequest(app, { method, endpoint, status, payload, query, expected, token })` (usam `mocked-token: 123-abc`).
+- `test/fixtures.ts` — `newTxid()` e `buildRec()` (payload válido de recorrência).
 
 ## 10. Limitações e pontos de atenção conhecidos
 
-1. **`cobr` incompleto**: `PSP.addCobR` retorna `null` e `CobRController` não está registrado em `AppModule`.
-2. **Webhooks** não implementados (`webhook.controller.ts` vazio).
+1. **Webhooks** são apenas cadastrados; o mock não envia notificações para `webhookUrl`.
+2. **Pix**: devoluções (`/pix/:e2eid/devolucao`) não implementadas; `devolucaoPresente=true` sempre retorna lista vazia.
 3. **Lint**: o código atual não segue o Prettier (≈2.9k erros de `eslint` sem `--fix`). `npm run lint` usa `--fix` e reformataria o repositório inteiro — rode apenas nos arquivos alterados.
 4. `src/controllers/fakedb.ts` é uma cópia de `src/libs/fakedb.ts` não utilizada; sempre importe de `src/libs/fakedb`.
 5. Ao criar coleções novas no `PSP`, registre-as em `COLLECTIONS` (`src/bootstrap.ts`); os testes que criam coleções manualmente não detectam a ausência no bootstrap real.

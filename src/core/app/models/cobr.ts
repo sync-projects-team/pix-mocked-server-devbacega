@@ -1,9 +1,7 @@
-import { IsNotEmpty, IsNotEmptyObject, IsNumberString, MaxLength, ValidateNested } from "class-validator"
-import { Chave, ICriacao, Expiracao, IInfoAdicional, Pessoa, PixID, ModalidadeAlteracao, Situacao, PixRevisao, Vencimento, DadosPessoa, DadosConta } from "../models"
+import { IsBoolean, IsDefined, IsIn, IsNotEmpty, IsNotEmptyObject, IsNumberString, MaxLength, ValidateNested } from "class-validator"
+import { PixID, Vencimento, DadosPessoa, DadosConta, ICriacao, ListFilter } from "../models"
 import { Type } from "class-transformer"
-import { IntersectionType } from '@nestjs/swagger';
-import { IsCNPJValid, IsCPFValid, IsDICTExists, IsDICTValid, MinStringNumber } from "../../../validators/custom-validators";
-import { LocID, LocGetRequest } from "./loc";
+import { IsCNPJValid, IsCPFValid, MinStringNumber } from "../../../validators/custom-validators";
 import { PoliticaRetentativa } from "./rec";
 
 /** 	
@@ -15,134 +13,91 @@ export class Valor {
     original: string
 }
 
-export class Alteracao {
-    /** Trata-se de um campo que determina se o valor final do documento pode ser alterado pelo pagador. Na ausência desse campo, assume-se que não se pode alterar o valor do documento de cobrança, ou seja, assume-se o valor 0. Se o campo estiver presente e com valor 1, então está determinado que o valor final da cobrança pode ter seu valor alterado pelo pagador. */
-    modalidadeAlteracao?: ModalidadeAlteracao
-}
-
-export class Retirada {
-    retirada?: any
-}
-
-
-export enum StatusCobR{
-    Aprovada = "APROVADA",
-    Cancelada = "CANCELADA",
+export enum StatusCobR {
     Criada = "CRIADA",
+    Ativa = "ATIVA",
+    Concluida = "CONCLUIDA",
     Expirada = "EXPIRADA",
-    Rejeitada = "REJEITADA"
+    Rejeitada = "REJEITADA",
+    Cancelada = "CANCELADA"
 }
 
-
-export class CobRGetResponse implements  PixID {
-    idrec: string
-    txid: string
-
-    calendario: {
-        dataCriacao: string,
-        dataVencimento: string
-    }
-    valor:string
-    status: StatusCobR
-    politicaRetentativa: PoliticaRetentativa
-    
-    loc: LocGetRequest
-    location: string
-    devedor: Pessoa
-    solicitacaoPagador: string
-    infoAdicionais: IInfoAdicional[]
+export enum StatusTentativaCobR {
+    Solicitada = "SOLICITADA",
+    Agendada = "AGENDADA",
+    Paga = "PAGA",
+    Cancelada = "CANCELADA",
+    Rejeitada = "REJEITADA",
+    Expirada = "EXPIRADA"
 }
 
-export class CobRValor extends IntersectionType(Valor, Alteracao, Retirada)
-{
-
+export interface ITentativaCobR {
+    dataLiquidacao: string
+    tipo: "AGND" | "NTAG" | "RIFL"
+    status: StatusTentativaCobR
+    atualizacao: { status: StatusTentativaCobR, data: string }[]
 }
-
-
 
 export class CobRPutRequest {
     @IsNotEmpty({ message: 'O campo $$ não respeita o schema.' })
     idRec: string
+
     @MaxLength(140, { message: 'O campo $$ não respeita o schema.' })
-    infoAdicional: string
+    infoAdicional?: string
+
+    @IsDefined({ message: 'O objeto $$ não respeita o schema.' })
+    @IsNotEmptyObject({ nullable: false }, { message: 'O objeto $$ não respeita o schema.' })
     @ValidateNested({})
     @Type(() => Vencimento)
     calendario: Vencimento
 
+    @IsDefined({ message: 'O objeto $$ não respeita o schema.' })
+    @IsNotEmptyObject({ nullable: false }, { message: 'O objeto $$ não respeita o schema.' })
+    @ValidateNested({})
+    @Type(() => Valor)
+    valor: Valor
+
+    @IsBoolean({ message: 'O campo $$ não respeita o schema.' })
+    ajusteDiaUtil?: boolean
+
     @ValidateNested({})
     @Type(() => DadosPessoa)
-    dadosDevedor: DadosPessoa
+    devedor?: DadosPessoa
+
     @ValidateNested({})
     @Type(() => DadosConta)
-    contaRecebedor: DadosConta
+    recebedor?: DadosConta
 }
 
 export class CobRPatchRequest {
-    @ValidateNested({})
-    @Type(() => LocID)
-    loc?: LocID
-    @ValidateNested({})
-    @Type(() => CobRValor)
-    valor?: CobRValor
-    @ValidateNested()
-    @Type(() => Expiracao)
-    calendario?: Expiracao
-    @ValidateNested({})
-    @Type(() => Pessoa)
-    devedor?: Pessoa
-    solicitacaoPagador?: string
-    status?: "REMOVIDA_PELO_USUARIO_RECEBEDOR"
+    @IsIn([StatusCobR.Cancelada], { message: 'O campo $$ não respeita o schema.' })
+    status?: StatusCobR.Cancelada
 }
 
-export class CobRPatchResponse extends CobRGetResponse {
-
+export class CobRGetResponse implements PixID {
+    idRec: string
+    txid: string
+    infoAdicional?: string
+    calendario: Vencimento & ICriacao
+    valor: Valor
+    ajusteDiaUtil: boolean
+    devedor?: DadosPessoa
+    recebedor?: DadosConta
+    status: StatusCobR
+    politicaRetentativa: PoliticaRetentativa
+    atualizacao: { status: StatusCobR, data: string }[]
+    tentativas: ITentativaCobR[]
 }
 
+export class CobRPutResponse extends CobRGetResponse { }
 
-export class CobRPutResponse extends CobRGetResponse {
+export class CobRPatchResponse extends CobRGetResponse { }
 
-}
-
-export interface ICobRPatchResponse extends CobRGetResponse {
-
-}
-
-
-export interface ICobRQueryRequest {
-    inicio: string,
-    fim: string,
-    cpf?: string,
-    cnpj?: string,
-    locationPresente?: boolean,
-    status: string,
-    paginacao: {
-        paginaAtual: number,
-        itensPorPagina: number
-    }
-}
-
-export interface ICobRQueryResponse {
-    parametros: {
-        inicio: string,
-        fim: string,
-        paginacao: {
-            paginaAtual: number,
-            itensPorPagina: number,
-            quantidadeDePaginas: number,
-            quantidadeTotalDeItens: number
-        }
-    },
-    cobs: { $ref: string }[]
-}
-
-export class CobRGetFilter {
-    inicio: string
-    fim: string
+export class CobRGetFilter extends ListFilter {
+    idRec?: string
     @IsCPFValid({ message: 'O campo $$ não respeita o schema.' })
     cpf?: string
     @IsCNPJValid({ message: 'O campo $$ não respeita o schema.' })
     cnpj?: string
-    paginacao?: { paginaAtual: number, itensPorPagina: number }
-    status?: Situacao
-    locationPresente?: boolean
+    status?: StatusCobR
 }

@@ -171,3 +171,5 @@ export const errorFormatter = (errors: ValidationError[], errMessage?: any, pare
 
     return message;
 }
+export const parseBoolean = (value: unknown): boolean | undefined =>
+    value === undefined || value === null || value === '' ? undefined : value === true || value === 'true';

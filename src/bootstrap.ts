@@ -9,6 +9,9 @@ export const COLLECTIONS: Record<string, string[]> = {
   LOCATIONS: ['id', 'uuid'],
   LOC_COB: ['id', 'txid'],
   REC: ['idRec'],
+  COBR: ['txid'],
+  WEBHOOK: ['chave'],
+  PIX: ['e2eid'],
 };
 
 export async function setupDatabase(): Promise<void> {
