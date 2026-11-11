@@ -9,6 +9,7 @@ import { LocGetResponse, LocGetFilter, LocID, LocPutRequest, LocPutResponse } fr
 import { CobVGetFilter, CobVGetResponse, CobVPatchRequest, CobVPatchResponse, CobVPutRequest, CobVPutResponse, CobVValor } from "./models/cobv";
 import { CobRGetFilter, CobRGetResponse, CobRPatchRequest, CobRPatchResponse, CobRPutRequest, CobRPutResponse, StatusCobR, StatusTentativaCobR } from "./models/cobr";
 import { PoliticaRetentativa, RecGetFilter, RecPatchRequest, RecPostRequest, RecRequest, StatusRec } from "./models/rec";
+import { PixGetFilter, PixGetResponse } from "./models/pix";
 import { WebhookGetFilter, WebhookGetResponse, WebhookPutRequest } from "./models/webhook";
 import { owners } from '../../data/db.json'
 
@@ -23,6 +24,7 @@ export class PSP {
     private loccob: MemoryDB;
     private rec: MemoryDB;
     private webhook: MemoryDB;
+    private pix: MemoryDB;
 
     constructor() {
 
@@ -37,6 +39,7 @@ export class PSP {
 
         this.rec = MemoryDB.get("REC");
         this.webhook = MemoryDB.get("WEBHOOK");
+        this.pix = MemoryDB.get("PIX");
 
     }
 
@@ -382,6 +385,10 @@ export class PSP {
                 }
 
                 await this.cob.update(itm.IdOwner, { txid: itm.txid }, { ...curr, ...itm.data });
+
+                if ((itm.data.status as string) === Situacao.Concluida) {
+                    await this._addPix(itm.IdOwner, { ...curr, ...itm.data } as CobGetResponse);
+                }
             }
             else {
                 await this.cob.patch(itm.IdOwner, { txid: itm.txid }, { loc: curr.loc });
@@ -576,6 +583,51 @@ export class PSP {
 
     async removeWebhook({ IdOwner, chave }: { IdOwner: string, chave: string }): Promise<boolean> {
         return await this.webhook.remove(IdOwner, { chave });
+    }
+
+    private async _addPix(IdOwner: string, cob: CobGetResponse): Promise<PixGetResponse> {
+        const horario = (new Date()).toJSON();
+        const e2eid = `E${this._owner(IdOwner).ISPB}${horario.replace(/\D/g, '').substring(0, 12)}${this._randomAlnum(11)}`;
+        const { nome, cpf, cnpj } = cob.devedor || ({} as CobGetResponse['devedor']);
+
+        await this.pix.add(IdOwner, {
+            e2eid,
+            endToEndId: e2eid,
+            txid: cob.txid,
+            valor: cob.valor.original,
+            chave: cob.chave,
+            horario,
+            ...(cob.solicitacaoPagador ? { infoPagador: cob.solicitacaoPagador } : {}),
+            ...(nome ? { pagador: { nome, ...(cpf ? { cpf } : { cnpj }) } } : {}),
+            devolucoes: []
+        });
+        return await this.readPix({ IdOwner, e2eid });
+    }
+
+    async readPix({ IdOwner, e2eid }: { IdOwner: string, e2eid: string }): Promise<PixGetResponse> {
+        const itm = await this.pix.read(IdOwner, { e2eid });
+        if (itm) {
+            const { e2eid: _, ...pix } = itm;
+            return pix;
+        }
+    }
+
+    async listPix(filter: PixGetFilter & { IdOwner: string }) {
+        const doc = filter.cpf || filter.cnpj;
+        const txIdPresente = parseBoolean(filter.txIdPresente);
+        const devolucaoPresente = parseBoolean(filter.devolucaoPresente);
+
+        const pix = (await this.pix.list(filter.IdOwner))
+            .filter(f =>
+                this._inPeriod(f.horario, filter)
+                && (!filter.txid || f.txid === filter.txid)
+                && (txIdPresente === undefined || !!f.txid === txIdPresente)
+                && (devolucaoPresente === undefined || (f.devolucoes.length > 0) === devolucaoPresente)
+                && (!doc || f.pagador?.cpf === doc || f.pagador?.cnpj === doc)
+            )
+            .map(({ e2eid, ...p }) => p);
+
+        return this._listResult(filter, 'pix', pix, { txid: filter.txid, txIdPresente, devolucaoPresente, cpf: filter.cpf, cnpj: filter.cnpj });
     }
 }
 

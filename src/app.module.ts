@@ -6,10 +6,11 @@ import { LocationController } from './controllers/location.controller';
 import { RecController } from './controllers/rec.controller';
 import { CobRController } from './controllers/cobr.controller';
 import { WebhookController } from './controllers/webhook.controller';
+import { PixController } from './controllers/pix.controller';
 
 @Module({
   imports: [],
-  controllers: [CobController, CobVController, CobRController, LocationController, RecController, WebhookController],
+  controllers: [CobController, CobVController, CobRController, LocationController, RecController, WebhookController, PixController],
   providers: [PSP],
 })
 export class AppModule {
