@@ -187,7 +187,7 @@ export class PSP {
         if (!curr) {
             return undefined;
         }
-        if (itm.data.status && curr.status !== itm.data.status) {
+        if (itm.data.status) {
             if (![StatusCobR.Criada, StatusCobR.Ativa].includes(curr.status)) {
                 throw new BadRequestException({ status: `A cobrança no status ${curr.status} não pode ser alterada.` });
             }
