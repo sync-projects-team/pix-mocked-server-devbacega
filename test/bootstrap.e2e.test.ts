@@ -30,9 +30,17 @@ describe('Bootstrap (configuração do main.ts)', () => {
   const newTxid = () => randomUUID().replace(/-/g, '');
 
   it('cria todas as coleções usadas pelo PSP', () => {
-    ['COB', 'COB_HIST', 'LOCATIONS', 'LOC_COB', 'REC', 'CORRENTISTAS'].forEach(
-      (name) => expect(MemoryDB.get(name)).toBeDefined(),
-    );
+    [
+      'COB',
+      'COB_HIST',
+      'LOCATIONS',
+      'LOC_COB',
+      'REC',
+      'COBR',
+      'WEBHOOK',
+      'PIX',
+      'CORRENTISTAS',
+    ].forEach((name) => expect(MemoryDB.get(name)).toBeDefined());
   });
 
   it('PUT /cob/:txid cria a cobrança', async () => {
