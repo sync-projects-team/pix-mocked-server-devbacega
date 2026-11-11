@@ -9,8 +9,8 @@
 
 ## Controllers (`src/controllers/<recurso>.controller.ts`)
 
-- `@Controller('<recurso>')` com o nome exato do path BACEN (`cob`, `cobv`, `cobr`, `loc`, `rec`).
-- **Sempre** `@UseInterceptors(HttpInterceptor)` na classe — ele autentica (`mocked-token` → `headers['IdOwner']`) e converte erros para o padrão BACEN.
+- `@Controller('<recurso>')` com o nome exato do path BACEN (`cob`, `cobv`, `cobr`, `loc`, `rec`, `pix`, `webhook`).
+- **Sempre** `@UseInterceptors(HttpInterceptor)` na classe — ele autentica (`Authorization: Bearer` ou `mocked-token` → `headers['IdOwner']`) e converte erros para o padrão BACEN.
 - Leia o tenant com `@Headers() headers` e `const IdOwner = headers['IdOwner'];`.
 - Controllers são finos: montam `PixRequest<T>` (`{ IdOwner, txid, data }`) e delegam ao `PSP`. Nenhuma regra de negócio no controller.
 - `txid` gerado no servidor: `randomUUID().replace(/\-/g, '')`.
@@ -37,7 +37,8 @@
 
 ## Interceptor e erros
 
-- Ao criar um recurso novo, registre o prefixo dele no mapa de 400 do `HttpInterceptor` (`src/http.interceptor.ts`), senão a resposta de validação quebra (`handle` indefinido → 500). Ex.: `'cob' → 'Cob'`, `'cobv' → 'CobV'`, `'loc' → 'Location'`, `'rec' → 'Rec'`.
+- Ao criar um recurso novo, registre `[prefixo, detail]` dele em `BAD_REQUEST_TYPES` do `HttpInterceptor` (`src/http.interceptor.ts`); sem isso o 400 não sai no formato BACEN. Ex.: `'cob' → 'Cob'`, `'cobv' → 'CobV'`, `'cobr' → 'CobR'`, `'loc' → 'Location'`, `'rec' → 'Rec'`, `'pix' → 'Pix'`, `'webhook' → 'Webhook'`.
+- Para listas, reutilize os helpers privados do `PSP` `_inPeriod` (filtro `inicio`/`fim`) e `_listResult` (paginação, aceita `paginacao[x]` e `paginacao.x`); booleanos de query via `parseBoolean` (`src/libs/utils.ts`).
 - Tipos de erro seguem `https://pix.bcb.gov.br/api/v2/error/<Prefixo>OperacaoInvalida`, `AcessoNegado`, `NaoEncontrado`, `ServicoIndisponivel`.
 
 ## Swagger

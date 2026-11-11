@@ -41,27 +41,28 @@ Os dados ficam em memória (`MemoryDB`, `src/libs/fakedb.ts`), isolados por tena
 ```mermaid
 flowchart LR
     C[Cliente / Postman] -- "1. POST /auth<br/>client_id + client_secret" --> A[AuthModule :3001]
-    A -- "accesstoken (ex.: 123-abc)" --> C
-    C -- "2. header mocked-token" --> I[HttpInterceptor]
+    A -- "access_token (ex.: 123-abc)" --> C
+    C -- "2. Authorization: Bearer (ou mocked-token)" --> I[HttpInterceptor]
     subgraph API[AppModule :3000]
-        I --> K[Controllers<br/>/cob /cobv /loc /rec]
+        I --> K[Controllers<br/>/cob /cobv /cobr /loc /rec /pix /webhook]
         K --> P[PSP service]
     end
     P --> M[(MemoryDB<br/>seed: src/data/db.json)]
 ```
 
-Fluxo de autenticação: o token retornado por `POST /auth` é `client_id-client_secret` (ex.: `123-abc`) e deve ser enviado na API principal no header **`mocked-token`**. Sem ele a resposta é `401 AcessoNegado`. Credenciais disponíveis: `123/abc`, `456/def`, `789/ghi`, `012/fab`, `345/cde`.
+Fluxo de autenticação: o token retornado por `POST /auth` é `client_id-client_secret` (ex.: `123-abc`) e deve ser enviado na API principal em **`Authorization: Bearer <token>`** (o header **`mocked-token`** segue aceito como fallback). A resposta traz `access_token` e, por compatibilidade, `accesstoken`. Sem ele a resposta é `401 AcessoNegado`. Credenciais disponíveis: `123/abc`, `456/def`, `789/ghi`, `012/fab`, `345/cde`.
 
 ## RECURSOS PIX SUPORTADOS
 
 | Recurso | Rota | Operações | Status |
 | --- | --- | --- | --- |
 | Cobrança imediata | `/cob` | `PUT /cob/:txid`, `POST /cob`, `GET /cob/:txid`, `GET /cob`, `PATCH /cob/:txid`, `DELETE /cob/:txid` | Implementado (com revisões e location automática) |
-| Cobrança com vencimento | `/cobv` | `PUT /cobv/:txid`, `GET /cobv/:txid`, `GET /cobv`, `PATCH /cobv/:txid`, `DELETE /cobv/:txid` | Implementado (multa, juros, desconto) |
+| Cobrança com vencimento | `/cobv` | `PUT /cobv/:txid`, `GET /cobv/:txid`, `GET /cobv`, `PATCH /cobv/:txid`, `DELETE /cobv/:txid` | Implementado (multa, juros, desconto, abatimento) |
 | Location (payload QR Code) | `/loc` | `PUT /loc`, `GET /loc/:id`, `GET /loc`, `DELETE /loc/:id/txid` | Implementado |
-| Recorrência | `/rec` | `POST /rec` | Implementado (criação) |
-| Cobrança recorrente | `/cobr` | — | Em desenvolvimento (controller não registrado) |
-| Webhooks | — | — | Não implementado |
+| Recorrência | `/rec` | `POST /rec`, `GET /rec/:idRec`, `GET /rec`, `PATCH /rec/:idRec`, `GET /rec/:idRec/ativacao` | Implementado |
+| Cobrança recorrente | `/cobr` | `PUT /cobr/:txid`, `POST /cobr`, `GET /cobr/:txid`, `GET /cobr`, `PATCH /cobr/:txid`, `POST /cobr/:txid/retentativa/:data` | Implementado |
+| Pix recebidos | `/pix` | `GET /pix/:e2eid`, `GET /pix` | Implementado (Pix gerado quando `cob`/`cobv` recebe `PATCH { status: "CONCLUIDA" }`) |
+| Webhooks | `/webhook` | `PUT /webhook/:chave`, `GET /webhook/:chave`, `DELETE /webhook/:chave`, `GET /webhook` | Implementado (cadastro; sem disparo de notificações) |
 | Autenticação | `:3001/auth` | `POST /auth` | Implementado |
 
 Erros seguem o padrão BACEN (`type`, `title`, `status`, `detail`, `violacoes`).
@@ -114,9 +115,9 @@ Abra o projeto no VS Code com *Dev Containers: Reopen in Container*. A imagem `n
 │   ├── main.ts              # bootstrap dos servidores 3000 e 3001 + seed do MemoryDB
 │   ├── app.module.ts        # AppModule (API Pix)
 │   ├── auth.module.ts       # AuthModule (OAuth2 mock)
-│   ├── http.interceptor.ts  # autenticação por mocked-token e erros no padrão BACEN
+│   ├── http.interceptor.ts  # autenticação (Bearer / mocked-token) e erros no padrão BACEN
 │   ├── swagger-*.config.ts  # configuração Swagger de cada servidor
-│   ├── controllers/         # rotas HTTP (cob, cobv, cobr, loc, rec, auth)
+│   ├── controllers/         # rotas HTTP (cob, cobv, cobr, loc, rec, pix, webhook, auth)
 │   ├── core/app/            # PSP (regras de negócio) e DTOs
 │   ├── core/auth/           # serviço de autenticação
 │   ├── libs/                # MemoryDB, mensagens, CPF/CNPJ, utils
