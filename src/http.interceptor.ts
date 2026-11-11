@@ -28,9 +28,24 @@ export class HttpInterceptor implements NestInterceptor {
         503: () => (this.handleError(`https://pix.bcb.gov.br/api/v2/error/ServicoIndisponivel`, 'Serviço Indisponível', `Serviço não está disponível no momento. Serviço solicitado pode estar em manutenção ou fora da janela de funcionamento.`, 503, [])),
     }
 
+    private static readonly BAD_REQUEST_TYPES: { [endpoint: string]: [prefix: string, detail: string] } = {
+        'cob': ['Cob', 'A cobrança não respeita o schema.'],
+        'cobv': ['CobV', 'A cobrança não respeita o schema.'],
+        'cobr': ['CobR', 'A cobrança não respeita o schema.'],
+        'loc': ['Location', 'O Location não respeita o schema.'],
+        'rec': ['Rec', 'A recorrência não respeita o schema.'],
+        'webhook': ['Webhook', 'O webhook não respeita o schema.'],
+        'pix': ['Pix', 'O Pix não respeita o schema.'],
+    }
+
+    private extractToken(headers: { [name: string]: string }): string | undefined {
+        const bearer = headers['authorization']?.match(/^Bearer\s+(\S+)$/i)?.[1];
+        return bearer || headers['mocked-token'];
+    }
+
     intercept(context: ExecutionContext, next: CallHandler): Observable<void> {
         const request = context.switchToHttp().getRequest();
-        const token = request.headers['mocked-token'];
+        const token = this.extractToken(request.headers);
 
         const own = token ? owners.find(f => f.token === token) : undefined;
 
@@ -49,31 +64,15 @@ export class HttpInterceptor implements NestInterceptor {
                 catchError((err: HttpException): Observable<any> => {
                     const statusHandle = {
                         400: () => {
-                            const endpoint = request['url'].split('/')[1];
+                            const endpoint = (request.path || request.url.split('?')[0]).split('/')[1];
+                            const [prefix, detail] = HttpInterceptor.BAD_REQUEST_TYPES[endpoint] || [];
+                            if (!prefix) {
+                                throw err;
+                            }
 
-                            const handle: (msgs: any) => Observable<any> = {
-                                'cob': (msgs: { [key: string]: string }) => {
-                                    const violacoes = Object.keys(msgs).map((key: string) => ({ propriedade: `${endpoint}.${key}`, razao: msgs[key].replace('$$', `${endpoint}.${key}`) }));
-                                    throw new BadRequestException(this.ServerErrorTypes[err.getStatus()]('Cob', "A cobrança não respeita o schema.", violacoes));
-                                },
-                                'cobv': (msgs: { [key: string]: string }) => {
-                                    const violacoes = Object.keys(msgs).map((key: string) => ({ propriedade: `${endpoint}.${key}`, razao: msgs[key].replace('$$', `${endpoint}.${key}`) }));
-                                    throw new BadRequestException(this.ServerErrorTypes[err.getStatus()]('CobV', "A cobrança não respeita o schema.", violacoes));
-                                },
-                                'loc': (msgs: { [key: string]: string }) => {
-                                    const violacoes = Object.keys(msgs).map((key: string) => ({ propriedade: `${endpoint}.${key}`, razao: msgs[key].replace('$$', `${endpoint}.${key}`) }));
-                                    throw new BadRequestException(this.ServerErrorTypes[err.getStatus()]('Location', "O Location não respeita o schema.", violacoes));
-                                },
-
-                                'rec': (msgs: { [key: string]: string }) => {
-                                    const violacoes = Object.keys(msgs).map((key: string) => ({ propriedade: `${endpoint}.${key}`, razao: msgs[key].replace('$$', `${endpoint}.${key}`) }));
-                                    throw new BadRequestException(this.ServerErrorTypes[err.getStatus()]('Rec', "A recorrência não respeita o schema.", violacoes));
-                                },
-                                
-                            }[endpoint];
-
-                            //console.log(err.getResponse().valueOf())
-                            return handle(err.getResponse().valueOf()); //return handle(JSON.parse(err.getResponse().valueOf()['message']));
+                            const msgs: { [key: string]: string } = err.getResponse().valueOf() as any;
+                            const violacoes = Object.keys(msgs).map((key: string) => ({ propriedade: `${endpoint}.${key}`, razao: msgs[key].replace('$$', `${endpoint}.${key}`) }));
+                            throw new BadRequestException(this.ServerErrorTypes[400](prefix, detail, violacoes));
                         },
                         404: () => {
                             throw new NotFoundException(this.ServerErrorTypes[err.getStatus()]())
