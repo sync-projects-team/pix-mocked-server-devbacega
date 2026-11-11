@@ -15,7 +15,7 @@ Aguarde os logs `Nest application successfully started` (aparecem duas vezes: Ap
 ## Opção B — build compilado
 ```bash
 npm run build
-node dist/src/main.js      # 'npm run start:prod' procura dist/main e falha localmente
+npm run start:prod         # node dist/main
 ```
 
 ## Opção C — Docker
@@ -42,5 +42,4 @@ curl -s http://localhost:3000/cob/naoexiste                              # 401 A
 ## Comportamentos esperados / conhecidos
 - `POST /auth` demora ~2 s (simulação) e responde `201` com `{ accesstoken, expires_in: 300 }`.
 - Token vai no header `mocked-token`, não em `Authorization`.
-- Hoje `PUT /cob/:txid`, `PUT /loc` e `POST /rec` retornam 500 no servidor real porque `main.ts` não cria `LOC_COB`, `COB_HIST` e `REC` (ver `.devin/instructions/architecture.md` §10).
 - Para parar: `Ctrl+C`, ou `lsof -ti :3000 -ti :3001 | xargs kill`.

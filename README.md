@@ -56,8 +56,8 @@ Fluxo de autenticação: o token retornado por `POST /auth` é `client_id-client
 
 | Recurso | Rota | Operações | Status |
 | --- | --- | --- | --- |
-| Cobrança imediata | `/cob` | `PUT /cob/:txid`, `POST /cob`, `GET /cob/:txid`, `GET /cob`, `PATCH /cob/:txid` | Implementado (com revisões e location automática) |
-| Cobrança com vencimento | `/cobv` | `PUT /cobv/:txid`, `GET /cobv/:txid`, `GET /cobv`, `PATCH /cobv/:txid` | Implementado (multa, juros, desconto) |
+| Cobrança imediata | `/cob` | `PUT /cob/:txid`, `POST /cob`, `GET /cob/:txid`, `GET /cob`, `PATCH /cob/:txid`, `DELETE /cob/:txid` | Implementado (com revisões e location automática) |
+| Cobrança com vencimento | `/cobv` | `PUT /cobv/:txid`, `GET /cobv/:txid`, `GET /cobv`, `PATCH /cobv/:txid`, `DELETE /cobv/:txid` | Implementado (multa, juros, desconto) |
 | Location (payload QR Code) | `/loc` | `PUT /loc`, `GET /loc/:id`, `GET /loc`, `DELETE /loc/:id/txid` | Implementado |
 | Recorrência | `/rec` | `POST /rec` | Implementado (criação) |
 | Cobrança recorrente | `/cobr` | — | Em desenvolvimento (controller não registrado) |
@@ -73,14 +73,14 @@ Erros seguem o padrão BACEN (`type`, `title`, `status`, `detail`, `violacoes`).
 ```bash
 npm ci
 npm run start:dev     # sobe :3000 e :3001 em watch mode
-npm run build         # compila para dist/ (entrypoint: dist/src/main.js)
+npm run build         # compila para dist/ (entrypoint: dist/main.js)
 npm test              # Jest + cobertura (coverage/)
 ```
 
 | Script | Uso |
 | --- | --- |
 | `start` / `start:dev` / `start:debug` | Sobe os dois servidores (normal / watch / debug) |
-| `start:prod` | `node dist/main` (no build local use `node dist/src/main.js`) |
+| `start:prod` | `node dist/main` (após `npm run build`) |
 | `build` | `nest build` |
 | `test` / `test:watch` / `test:cov` / `test:debug` | Testes Jest |
 | `lint` / `format` | ESLint (`--fix`) e Prettier — reescrevem os arquivos |
@@ -93,8 +93,6 @@ docker run --rm -p 3000:3000 -p 3001:3001 pix-mocked-server
 ```
 
 Build multi-stage: `node:20` para instalar/compilar e `node:20.16.0-alpine` na imagem final, expondo `3000` e `3001`.
-
-> **Atenção:** no estado atual o `docker build` falha no estágio `build` (`TS2307: Cannot find module '../../src/core/app/models/loc'`), porque `src/controllers/location.controller.ts` importa via `../../src/...` e o `dockerfile` copia o conteúdo de `src/` achatado em `/app`. Trocar esses imports por caminhos relativos (`../core/app/models/loc`, `../core/app/psp`, `../http.interceptor`) resolve.
 
 ### Devcontainer
 

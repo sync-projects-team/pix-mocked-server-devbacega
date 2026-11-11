@@ -20,14 +20,14 @@ Scripts disponíveis (`package.json`):
 
 | Script | Comando | Observação |
 | --- | --- | --- |
-| `build` | `nest build` | Gera `dist/`. Como `jest.config.ts` fica na raiz, o entrypoint sai em `dist/src/main.js`. |
+| `build` | `nest build` | Gera `dist/` (entrypoint `dist/main.js`; `jest.config.ts` fica fora via `tsconfig.build.json`). |
 | `start` | `nest start` | Compila e sobe uma vez. |
 | `start:dev` | `nest start --watch` | Recomendado para desenvolvimento. |
 | `start:debug` | `nest start --debug --watch` | Inspector na porta padrão 9229. |
-| `start:prod` | `node dist/main` | **Não encontra o arquivo** após `npm run build` local; use `node dist/src/main.js`. |
+| `start:prod` | `node dist/main` | Sobe o build gerado por `npm run build`. |
 | `test` | `jest` | Roda todas as suítes (`test/**/*.test.ts`) com cobertura em `coverage/`. |
 | `test:watch` / `test:cov` / `test:debug` | variações do Jest | |
-| `test:e2e` | `jest --config ./test/jest-e2e.json` | Regex `.e2e-spec.ts$` não casa com nenhum arquivo hoje; os e2e rodam em `npm test`. |
+| `test:e2e` | `jest --config ./test/jest-e2e.json` | Roda só as suítes `*.e2e.test.ts` (também incluídas em `npm test`). |
 | `lint` | `eslint ... --fix` | Reescreve arquivos. Ver `.devin/rules/code-style.md`. |
 | `format` | `prettier --write src test` | Reformata todo o código. |
 
@@ -48,8 +48,6 @@ Chamadas à API principal usam o header `mocked-token`:
 curl -s http://localhost:3000/cob/<txid> -H 'mocked-token: 123-abc'
 ```
 
-> Atenção: no estado atual, `main.ts` não cria as coleções `LOC_COB`, `COB_HIST` e `REC`; por isso `PUT /cob`, `PUT /loc` e `POST /rec` retornam 500 no servidor real (ver seção 10 de `architecture.md`).
-
 ## 2. Docker
 
 ```bash
@@ -57,7 +55,7 @@ docker build -t pix-mocked-server .
 docker run --rm -p 3000:3000 -p 3001:3001 pix-mocked-server
 ```
 
-> **Atenção:** no estado atual o `docker build` falha no estágio `build` (`TS2307: Cannot find module '../../src/core/app/models/loc'`), porque `src/controllers/location.controller.ts` importa via `../../src/...` e o `dockerfile` copia o conteúdo de `src/` achatado em `/app`. Trocar esses imports por caminhos relativos (`../core/app/models/loc`, `../core/app/psp`, `../http.interceptor`) resolve.
+> O `dockerfile` copia o conteúdo de `src/` achatado em `/app`; por isso imports em `src/` nunca devem usar `../../src/...`.
 
 Estágios do `dockerfile`:
 
@@ -84,15 +82,15 @@ npx jest --coverage=false             # mais rápido
 ```
 
 - Duração típica: ~50 s (as suítes `cob.controller` e `cobv.controller` levam ~45 s por causa do delay de 100 ms em `PSP.addLoc` e dos 2 s de `Auth.validate`).
-- Resultado de referência: **15 suítes, 260 testes passando**.
+- Resultado de referência: **16 suítes, 266 testes passando**.
 
 ## 5. Troubleshooting
 
 | Sintoma | Causa provável | Ação |
 | --- | --- | --- |
 | `EADDRINUSE :3000/:3001` | Outra instância rodando | `lsof -i :3000` / `kill` o processo |
-| `Cannot find module '.../dist/main'` | `start:prod` após build local | `node dist/src/main.js` |
+| `Cannot find module '.../dist/main'` | `start:prod` sem build | Rode `npm run build` antes |
 | `401 Access Token inválido.` | Falta header `mocked-token` ou token não está em `db.json.owners` | Envie `mocked-token: 123-abc` |
 | `400 ... corresponde a uma conta que não pertence a este usuário recebedor` | `chave` não existe em `db.json.correntistas` | Use uma `chave` do seed |
-| `docker build` falha com `TS2307 ... '../../src/...'` | Imports `../../src/...` em `location.controller.ts` + `src/` achatado no `dockerfile` | Corrigir os imports para caminhos relativos a `src/controllers/` |
+| `docker build` falha com `TS2307 ... '../../src/...'` | Algum import `../../src/...` + `src/` achatado no `dockerfile` | Use caminhos relativos ao arquivo |
 | `Duplicate Collection` em teste | `MemoryDB.create` chamado 2x no mesmo processo Jest | Crie coleções uma vez por arquivo de teste (`beforeAll`) |

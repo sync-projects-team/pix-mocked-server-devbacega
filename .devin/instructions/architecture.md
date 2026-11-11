@@ -118,15 +118,15 @@ Fluxo de uma requisição na API principal:
 
 | Recurso | Rota | Métodos expostos | Situação |
 | --- | --- | --- | --- |
-| Cobrança imediata (`cob`) | `/cob` | `PUT /cob/:txid`, `POST /cob` (txid gerado), `GET /cob/:txid[?revisao=n]`, `GET /cob` (filtro `inicio`, `fim`, `cpf`/`cnpj`, `locationPresente`, `paginacao`), `PATCH /cob/:txid` | Implementado. Cria location automaticamente, versiona revisões em `COB_HIST`, `calendario.expiracao` padrão 86400s. |
-| Cobrança com vencimento (`cobv`) | `/cobv` | `PUT /cobv/:txid`, `GET /cobv/:txid`, `GET /cobv`, `PATCH /cobv/:txid` | Implementado (`valor.multa`, `valor.juros`, `valor.desconto`; abatimento ainda não). `calendario.dataDeVencimento` não pode ser passada (`@NotPast`). Persiste na mesma coleção `COB`. |
+| Cobrança imediata (`cob`) | `/cob` | `PUT /cob/:txid`, `POST /cob` (txid gerado), `GET /cob/:txid[?revisao=n]`, `GET /cob` (filtro `inicio`, `fim`, `cpf`/`cnpj`, `locationPresente`, `paginacao`), `PATCH /cob/:txid`, `DELETE /cob/:txid` | Implementado. Cria location automaticamente, versiona revisões em `COB_HIST`, `calendario.expiracao` padrão 86400s. |
+| Cobrança com vencimento (`cobv`) | `/cobv` | `PUT /cobv/:txid`, `GET /cobv/:txid`, `GET /cobv`, `PATCH /cobv/:txid`, `DELETE /cobv/:txid` | Implementado (`valor.multa`, `valor.juros`, `valor.desconto`; abatimento ainda não). `calendario.dataDeVencimento` não pode ser passada (`@NotPast`). Persiste na mesma coleção `COB`. |
 | Cobrança recorrente (`cobr`) | `/cobr` | Controller existe (`PUT`, `POST`, `POST /:txid/retentativa/:data`, `GET`, `PATCH`) | **Parcial**: `PSP.addCobR` retorna `null` e `CobRController` não está em `AppModule` → rotas não expostas. |
 | Location (`loc`) | `/loc` | `PUT /loc` (body `{ tipoCob: "cob" \| "cobv" }`), `GET /loc/:id`, `GET /loc` (filtro `tipoCob`, `txIdPresente`), `DELETE /loc/:id/txid` (desvincula cobrança) | Implementado. `location` = `pix.example.com/qr/<uuid>`. |
 | Recorrência (`rec`) | `/rec` | `POST /rec` | Implementado (criação). `idRec` = `R` + (`N`\|`R` conforme `politicaRetentativa`) + `ISPB` do owner + `YYYYMMDD`. |
 | Webhooks | — | — | **Não implementado** (`webhook.controller.ts` vazio). |
 | Autenticação | `:3001/auth` | `POST /auth` | Implementado (ver seção 6). |
 
-> Os métodos `remove` de `cob`/`cobv`/`cobr` estão decorados com `@Get(':txid')` (duplicando a rota de leitura), portanto **não há rota `DELETE`** exposta para cobranças.
+> `DELETE /cob/:txid` e `DELETE /cobv/:txid` (métodos `remove`) são uma extensão do mock e **não existem na API oficial do BACEN**, onde a remoção é feita via `PATCH` com `status: REMOVIDA_PELO_USUARIO_RECEBEDOR`.
 
 ## 6. Autenticação OAuth2 mockada
 
@@ -157,15 +157,15 @@ Credenciais disponíveis (`src/data/db.json` → `owners`):
 
 Coleções usadas pelo `PSP`:
 
-| Coleção | SortKeys | Uso | Criada em `main.ts`? |
+| Coleção | SortKeys | Uso | Criada no bootstrap (`src/bootstrap.ts`)? |
 | --- | --- | --- | --- |
-| `CORRENTISTAS` | `chave` (testes também usam `cpfcnpj`) | chaves DICT válidas (seed `db.json.correntistas`) | Sim |
+| `CORRENTISTAS` | `chave`, `cpfcnpj` | chaves DICT válidas (seed `db.json.correntistas`) | Sim |
 | `COB` | `txid` | cobranças `cob` e `cobv` | Sim |
 | `LOCATIONS` | `id`, `uuid` | locations; `id = Date.now()` (com delay de 100 ms para evitar colisão) | Sim |
-| `LOC_COB` | `id`, `txid` | vínculo location ↔ cobrança | **Não** |
-| `COB_HIST` | `id` (`md5(txid, revisao)`) | histórico de revisões | **Não** |
+| `LOC_COB` | `id`, `txid` | vínculo location ↔ cobrança | Sim |
+| `COB_HIST` | `id` (`md5(txid, revisao)`) | histórico de revisões | Sim |
 | `COBV`, `COBR` | `txid` | reservadas (não usadas efetivamente) | **Não** |
-| `REC` | `idRec` | recorrências | **Não** |
+| `REC` | `idRec` | recorrências | Sim |
 
 Seed (`src/data/db.json`): 5 `owners` (credenciais/tenants) e 3 `correntistas` (chaves aleatórias DICT com CPF/CNPJ, nome e cidade). As cobranças só aceitam `chave` presente em `CORRENTISTAS` (`@IsDICTExists`).
 
@@ -183,27 +183,25 @@ Resumo (detalhes em [`setup.md`](./setup.md)):
 ```bash
 npm ci
 npm run start:dev          # watch mode, sobe :3000 e :3001
-npm run build              # gera dist/ (ver observação abaixo)
-npm test                   # Jest com cobertura (260 testes em 15 suites)
-docker build -t pix-mocked-server . && docker run -p 3000:3000 -p 3001:3001 pix-mocked-server   # hoje falha, ver §10 item 7
+npm run build              # gera dist/main.js
+npm run start:prod         # node dist/main
+npm test                   # Jest com cobertura (266 testes em 16 suites)
+npm run test:e2e           # só as suítes *.e2e.test.ts
+docker build -t pix-mocked-server . && docker run -p 3000:3000 -p 3001:3001 pix-mocked-server
 ```
 
 Testes (`jest.config.ts`, preset `ts-jest`, `collectCoverage: true`, saída em `coverage/`):
 
-- `test/*.e2e.test.ts` — sobem `AppModule` com `supertest` (cob, cobv, loc, rec).
+- `test/*.e2e.test.ts` — sobem `AppModule` com `supertest` (cob, cobv, loc, rec). `test/bootstrap.e2e.test.ts` usa `setupDatabase()`/`createValidationPipe()` de `src/bootstrap.ts`, a mesma configuração do `main.ts`.
 - `test/controllers/*.test.ts` — instanciam controllers + `PSP` via `Test.createTestingModule`.
 - `test/core/**`, `test/libs/**`, `test/validators/**` — unitários de `MemoryDB`, `PSP`, utils, mensagens e validadores.
 - `test/e2e.ts` — helpers `expectPost200/201/400/401` (usam `mocked-token: 123-abc`).
 
 ## 10. Limitações e pontos de atenção conhecidos
 
-Verificados durante a análise (comportamento atual de `main`):
-
-1. **Coleções faltando no bootstrap**: `main.ts` não cria `LOC_COB`, `COB_HIST` e `REC`. Com o servidor real, `PUT /cob/:txid` e `PUT /loc` retornam `500` (`Cannot read properties of undefined (reading 'read')`) e `POST /rec` também falha. Os testes não detectam porque cada suíte cria suas próprias coleções.
-2. **`ValidationPipe` diferente entre testes e produção**: os testes usam `transform: true`, `skipMissingProperties: true` e `exceptionFactory` com `errorFormatter` (`src/libs/utils.ts`); `main.ts` usa `new ValidationPipe()` padrão, então o formato de `violacoes` pode divergir em runtime.
-3. **`npm run start:prod` aponta para `dist/main`**, mas como `jest.config.ts` está na raiz e é incluído na compilação, o build gera `dist/src/main.js`. Use `node dist/src/main.js` localmente. No Docker o `src/` é copiado "achatado" para `/app`, então lá o artefato é `dist/main.js`.
-4. **`npm run test:e2e`** usa `test/jest-e2e.json` com `testRegex: .e2e-spec.ts$`, que não casa com nenhum arquivo (os e2e se chamam `*.e2e.test.ts` e rodam em `npm test`).
-5. **`cobr` e webhooks** incompletos; rotas `DELETE` de cobranças inexistentes (ver seção 5).
-6. **Lint**: o código atual não segue o Prettier (≈2.9k erros de `eslint` sem `--fix`). `npm run lint` usa `--fix` e reformataria o repositório inteiro — rode apenas nos arquivos alterados.
-7. **Build Docker quebrado**: `docker build` falha com `TS2307` em `src/controllers/location.controller.ts`, que importa `../../src/core/app/models/loc`, `../../src/core/app/psp` e `../../src/http.interceptor`. No container `src/` é copiado achatado para `/app`, então esses caminhos não existem. Usar `../core/app/models/loc`, `../core/app/psp` e `../http.interceptor` corrige.
-8. `src/controllers/fakedb.ts` é uma cópia de `src/libs/fakedb.ts` não utilizada; sempre importe de `src/libs/fakedb`.
+1. **`cobr` incompleto**: `PSP.addCobR` retorna `null` e `CobRController` não está registrado em `AppModule`.
+2. **Webhooks** não implementados (`webhook.controller.ts` vazio).
+3. **Lint**: o código atual não segue o Prettier (≈2.9k erros de `eslint` sem `--fix`). `npm run lint` usa `--fix` e reformataria o repositório inteiro — rode apenas nos arquivos alterados.
+4. `src/controllers/fakedb.ts` é uma cópia de `src/libs/fakedb.ts` não utilizada; sempre importe de `src/libs/fakedb`.
+5. Ao criar coleções novas no `PSP`, registre-as em `COLLECTIONS` (`src/bootstrap.ts`); os testes que criam coleções manualmente não detectam a ausência no bootstrap real.
+6. Imports dentro de `src/` devem ser relativos ao próprio arquivo (nunca `../../src/...`): o `dockerfile` copia o conteúdo de `src/` achatado em `/app`.

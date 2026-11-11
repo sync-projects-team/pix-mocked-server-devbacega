@@ -19,7 +19,7 @@ docker logs -f pix-mock
 4. `final` (`node:20.16.0-alpine`): copia `node_modules` (com devDependencies) e `dist/`, `EXPOSE 3000 3001`, `ENTRYPOINT ["node", "main.js"]`.
 
 ## Diagnóstico
-- **Estado atual: o build falha** no estágio `build` com `TS2307: Cannot find module '../../src/core/app/models/loc'` (e `../../src/core/app/psp`, `../../src/http.interceptor`). Causa: `src/controllers/location.controller.ts` importa saindo de `src/`, e no container `src/` é achatado em `/app`. Correção: usar `../core/app/models/loc`, `../core/app/psp` e `../http.interceptor`.
+- `TS2307: Cannot find module '../../src/...'` no estágio `build`: algum arquivo em `src/` importa saindo de `src/`; no container `src/` é achatado em `/app`. Use caminhos relativos ao próprio arquivo.
 - Regra geral: imports relativos dentro de `src/` funcionam; qualquer import que suba até a raiz e volte para `src/` quebra no Docker.
 - Imagem grande: `node_modules` do estágio `init` inclui devDependencies.
 - Testes não rodam no Docker (pasta `test/` não é copiada). Rode `npm test` localmente/CI antes.

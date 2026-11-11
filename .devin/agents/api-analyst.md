@@ -16,7 +16,7 @@ Garantir que o PIX Mocked Server reproduza fielmente a API Pix do BACEN (https:/
 ## Responsabilidades
 1. **Inventário de endpoints**: para um recurso, listar rota, verbo, DTO de entrada, método do `PSP` chamado, coleções do `MemoryDB` tocadas e status HTTP possíveis.
 2. **Gap analysis vs BACEN**: campos ausentes, validações divergentes (pattern de valores `\d{1,10}.\d{2}`, tamanho de `txid` 26–35, `expiracao`, `dataDeVencimento`...), formato de erro (`type`, `title`, `status`, `detail`, `violacoes`).
-3. **Verificar exposição real**: um controller só existe se estiver em `AppModule.controllers`; decorators duplicados (`@Get(':txid')` em `remove`) anulam rotas.
+3. **Verificar exposição real**: um controller só existe se estiver em `AppModule.controllers`; decorators duplicados (mesmo verbo + caminho) anulam rotas.
 4. **Verificar runtime vs testes**: coleções criadas em `main.ts` x nos testes; `ValidationPipe` de `main.ts` x dos testes.
 5. Produzir relatório usando o prompt `.devin/prompts/analyze-endpoint.md`.
 
