@@ -103,9 +103,10 @@ Abra o projeto no VS Code com *Dev Containers: Reopen in Container*. A imagem `n
 ```
 .
 ├── .devin/                  # harness de IA (ver .devin/README.md)
-│   ├── agents/              # agentes especializados (api-analyst, test-engineer)
+│   ├── agents/              # agentes especializados (api-analyst, test-engineer, kaizen-guardian)
 │   ├── instructions/        # architecture.md, setup.md
 │   ├── prompts/             # prompts recorrentes (analyze-endpoint, add-pix-resource)
+│   ├── reports/             # pareceres gerados pelos agentes (ex.: kaizen-parecer-<data>.md)
 │   ├── rules/               # code-style, testing, nestjs-conventions
 │   └── skills/              # run-tests, start-server, swagger-docs, build-docker
 ├── .devcontainer/           # devcontainer.json (node:20)
