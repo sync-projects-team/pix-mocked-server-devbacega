@@ -1,13 +1,13 @@
-import { Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { MemoryDB } from "../../libs/fakedb";
-import { PixID, PixKey, PixRequest, TipoCob, Situacao, ModalidadeAlteracao, IPaginator, Expiracao } from "./models";
-import { getMD5Hash } from "../../libs/utils";
+import { PixID, PixKey, PixRequest, TipoCob, Situacao, ModalidadeAlteracao, IPaginator, Expiracao, ListFilter } from "./models";
+import { getMD5Hash, parseBoolean } from "../../libs/utils";
 import { randomUUID } from "crypto";
 import { MESSAGES } from "../../libs/messages";
 import { CobGetResponse, CobPatchRequest, CobPutRequest, CobPutResponse, CobGetFilter, CobPatchResponse } from "./models/cob";
 import { LocGetResponse, LocGetFilter, LocID, LocPutRequest, LocPutResponse } from "./models/loc";
 import { CobVGetFilter, CobVGetResponse, CobVPatchRequest, CobVPatchResponse, CobVPutRequest, CobVPutResponse, CobVValor } from "./models/cobv";
-import { CobRPutRequest, CobRPutResponse } from "./models/cobr";
+import { CobRGetFilter, CobRGetResponse, CobRPatchRequest, CobRPatchResponse, CobRPutRequest, CobRPutResponse, StatusCobR, StatusTentativaCobR } from "./models/cobr";
 import { PoliticaRetentativa, RecPostRequest, RecRequest } from "./models/rec";
 import { owners } from '../../data/db.json'
 
@@ -16,7 +16,6 @@ export class PSP {
 
     private cob: MemoryDB;
     private cobR: MemoryDB;
-    private cobV: MemoryDB;
     private transHist: MemoryDB;
     private locations: MemoryDB;
     private correntistas: MemoryDB;
@@ -29,7 +28,6 @@ export class PSP {
         this.transHist = MemoryDB.get("COB_HIST");
 
         this.cobR = MemoryDB.get("COBR");
-        this.cobV = MemoryDB.get("COBV");
 
         this.locations = MemoryDB.get("LOCATIONS");
         this.correntistas = MemoryDB.get("CORRENTISTAS");
@@ -37,6 +35,44 @@ export class PSP {
 
         this.rec = MemoryDB.get("REC");
 
+    }
+
+    private _owner(IdOwner: string) {
+        const own = owners.find(f => f.id === IdOwner);
+        if (!own) {
+            throw new Error(MESSAGES.Errors.defaults.NOT_FOUNT('OWNER'));
+        }
+        return own;
+    }
+
+    private _randomAlnum(size: number): string {
+        return randomUUID().replace(/\-/g, '').substring(0, size);
+    }
+
+    private _inPeriod(date: string, filter: ListFilter): boolean {
+        const d = new Date(date);
+        return (!filter.inicio || d >= new Date(filter.inicio)) && (!filter.fim || d <= new Date(filter.fim));
+    }
+
+    private _listResult<T>(filter: ListFilter, key: string, items: T[], parametros: object = {}) {
+        const paginaAtual = Number(filter.paginacao?.paginaAtual ?? filter['paginacao.paginaAtual'] ?? 0) || 0;
+        const itensPorPagina = Number(filter.paginacao?.itensPorPagina ?? filter['paginacao.itensPorPagina'] ?? 100) || 100;
+        const ini = paginaAtual * itensPorPagina;
+
+        return {
+            parametros: {
+                inicio: filter.inicio,
+                fim: filter.fim,
+                ...parametros,
+                paginacao: {
+                    paginaAtual,
+                    itensPorPagina,
+                    quantidadeDePaginas: Math.ceil(items.length / itensPorPagina),
+                    quantidadeTotalDeItens: items.length
+                }
+            },
+            [key]: items.slice(ini, ini + itensPorPagina)
+        };
     }
 
     private async joinLocCob(IdOwner: string, txid: string, id: number, tipoCob: TipoCob) {
@@ -98,9 +134,90 @@ export class PSP {
     }
 
     async addCobR(itm: PixRequest<CobRPutRequest>): Promise<CobRPutResponse> {
+        const rec = await this.rec.read(itm.IdOwner, { idRec: itm.data.idRec });
+        if (!rec) {
+            throw new BadRequestException({ idRec: 'O campo $$ não corresponde a uma recorrência existente.' });
+        }
+        if (await this.cobR.read(itm.IdOwner, { txid: itm.txid })) {
+            throw new BadRequestException({ txid: 'O campo $$ já está em uso.' });
+        }
 
+        const criacao = (new Date()).toJSON();
+        await this.cobR.add(itm.IdOwner, {
+            ...itm.data,
+            txid: itm.txid,
+            ajusteDiaUtil: itm.data.ajusteDiaUtil ?? true,
+            calendario: { ...itm.data.calendario, criacao },
+            status: StatusCobR.Criada,
+            politicaRetentativa: rec.politicaRetentativa,
+            atualizacao: [{ status: StatusCobR.Criada, data: criacao }],
+            tentativas: []
+        });
 
-        return null;
+        return await this.readCobR({ IdOwner: itm.IdOwner, txid: itm.txid });
+    }
+
+    async readCobR(key: PixKey): Promise<CobRGetResponse> {
+        return await this.cobR.read(key.IdOwner, { txid: key.txid });
+    }
+
+    async listCobR(filter: CobRGetFilter & { IdOwner: string }) {
+        const recs = await this.rec.list(filter.IdOwner);
+        const doc = filter.cpf || filter.cnpj;
+
+        const cobsr = (await this.cobR.list(filter.IdOwner)).filter((f: CobRGetResponse) => {
+            const devedor = recs.find(r => r.idRec === f.idRec)?.vinculo?.devedor;
+            return this._inPeriod(f.calendario.criacao, filter)
+                && (!filter.idRec || f.idRec === filter.idRec)
+                && (!filter.status || f.status === filter.status)
+                && (!doc || devedor?.cpf === doc || devedor?.cnpj === doc);
+        });
+
+        return this._listResult(filter, 'cobsr', cobsr, { idRec: filter.idRec, cpf: filter.cpf, cnpj: filter.cnpj, status: filter.status });
+    }
+
+    async editCobR(itm: PixRequest<CobRPatchRequest>): Promise<CobRPatchResponse> {
+        const curr = await this.readCobR(itm);
+        if (!curr) {
+            return undefined;
+        }
+        if (itm.data.status && curr.status !== itm.data.status) {
+            if (![StatusCobR.Criada, StatusCobR.Ativa].includes(curr.status)) {
+                throw new BadRequestException({ status: `A cobrança no status ${curr.status} não pode ser alterada.` });
+            }
+            await this.cobR.patch(itm.IdOwner, { txid: itm.txid }, {
+                status: itm.data.status,
+                atualizacao: [...curr.atualizacao, { status: itm.data.status, data: (new Date()).toJSON() }]
+            });
+        }
+        return await this.readCobR(itm);
+    }
+
+    async retentativaCobR(key: PixKey & { data: string }): Promise<CobRGetResponse> {
+        const curr = await this.readCobR(key);
+        if (!curr) {
+            throw new NotFoundException();
+        }
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(key.data) || isNaN(Date.parse(key.data))) {
+            throw new BadRequestException({ data: 'O campo $$ não respeita o schema.' });
+        }
+        if (curr.politicaRetentativa !== PoliticaRetentativa.Permite) {
+            throw new BadRequestException({ politicaRetentativa: 'A recorrência não permite retentativas.' });
+        }
+        if (curr.tentativas.filter(f => f.tipo === 'NTAG').length >= 3) {
+            throw new BadRequestException({ tentativas: 'O limite de 3 retentativas foi atingido.' });
+        }
+
+        const agora = (new Date()).toJSON();
+        await this.cobR.patch(key.IdOwner, { txid: key.txid }, {
+            tentativas: [...curr.tentativas, {
+                dataLiquidacao: key.data,
+                tipo: 'NTAG',
+                status: StatusTentativaCobR.Solicitada,
+                atualizacao: [{ status: StatusTentativaCobR.Solicitada, data: agora }]
+            }]
+        });
+        return await this.readCobR(key);
     }
 
     async addCobV(itm: PixRequest<CobVPutRequest>): Promise<CobVPutResponse> {
